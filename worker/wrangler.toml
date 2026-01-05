@@ -1,4 +1,4 @@
-name = "jalopyalerts-worker"
+name = "jalopyalerts"
 main = "worker.js"
 compatibility_date = "2024-08-01"
 
