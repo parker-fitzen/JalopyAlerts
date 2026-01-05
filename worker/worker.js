@@ -2,6 +2,10 @@
 // NOTE: Be respectful: this multiplies upstream traffic. Add caching.
 
 const UPSTREAM = "https://inventory.pickapartjalopyjungle.com";
+// Daily alert sweep at 09:00 UTC (2:00 a.m. MST) to avoid future schedule drift.
+const DAILY_ALERT_CRON = "0 9 * * *";
+
+const SAVED_SEARCHES_KV_KEY = "saved-searches";
 
 const YARDS = [
   { id: "1020", name: "BOISE" },
@@ -70,6 +74,12 @@ export default {
       status: upstream.status,
       headers: outHeaders,
     });
+  },
+
+  // Scheduled alerts refresh (runs daily at 09:00 UTC).
+  async scheduled(event, env, ctx) {
+    if (event.cron && event.cron !== DAILY_ALERT_CRON) return; // ignore any stale cron triggers
+    ctx.waitUntil(rerunSavedSearches(env));
   },
 };
 
@@ -270,4 +280,67 @@ function corsHeaders() {
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Max-Age": "86400",
   };
+}
+
+async function rerunSavedSearches(env) {
+  const kv = getSearchStore(env);
+  if (!kv) return;
+
+  const saved = await kv.get(SAVED_SEARCHES_KV_KEY, { type: "json" });
+  const searches = Array.isArray(saved) ? saved : [];
+  if (!searches.length) return;
+
+  const refreshed = [];
+
+  for (const search of searches) {
+    const currentRows = await runSavedSearch(search);
+    const previousRows = Array.isArray(search.lastSnapshot) ? search.lastSnapshot : [];
+    const newVehicles = diffNewVehicles(currentRows, previousRows);
+
+    const next = {
+      ...search,
+      lastSnapshot: currentRows,
+    };
+
+    if (newVehicles.length) {
+      next.lastNotifiedAt = new Date().toISOString();
+    }
+
+    refreshed.push(next);
+  }
+
+  await kv.put(SAVED_SEARCHES_KV_KEY, JSON.stringify(refreshed));
+}
+
+async function runSavedSearch(search) {
+  const VehicleMake = (search?.VehicleMake || search?.make || "").toString().trim();
+  const VehicleModel = (search?.VehicleModel || search?.model || "").toString().trim();
+
+  if (!VehicleMake) return [];
+
+  const jobs = YARDS.map((y) => async () => {
+    const rows = await fetchAndParseInventory({
+      yardId: y.id,
+      yardName: y.name,
+      VehicleMake,
+      VehicleModel,
+    });
+    return rows;
+  });
+
+  const all = await runPool(jobs, 2);
+  return all.flat();
+}
+
+function diffNewVehicles(current, previous) {
+  const prevKeys = new Set((previous || []).map(inventoryKey));
+  return (current || []).filter((row) => !prevKeys.has(inventoryKey(row)));
+}
+
+function inventoryKey(row) {
+  return [row?.yardId, row?.year, row?.make, row?.model, row?.row].map((v) => String(v || "")).join(":");
+}
+
+function getSearchStore(env) {
+  return env?.ALERTS || env?.SAVED_SEARCHES || null;
 }
