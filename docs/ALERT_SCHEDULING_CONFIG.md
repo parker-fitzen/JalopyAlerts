@@ -14,6 +14,7 @@ This document explains how to provision the alert worker, its storage bindings, 
 
 ## Wrangler configuration
 - **Entry:** `main = "worker.js"` with `compatibility_date = "2024-08-01"` to match the current deployment.
+- **Deployment:** run `wrangler deploy --config worker/wrangler.toml` so the scheduled Worker uses the KV binding even when routed via Pages or a zone route.
 - **Routing:**
   - For Pages, mount the worker on the same zone and route `/alerts*` to the worker (or co-locate logic in Pages Functions) so the frontend can reach the alerts endpoints without extra CORS hops.
   - If you keep a standalone Worker, add a route such as `route = "example.com/alerts*"` under a `[routes]` block or use `routes = [ { pattern = "example.com/alerts*", zone_id = "..." } ]`.
@@ -48,6 +49,7 @@ These values must be available to **both** the scheduled Worker and any Pages Fu
   id = "<prod-namespace-id>"
   preview_id = "<preview-namespace-id>"
   ```
+  The current `worker/wrangler.toml` binds `ALERTS` with the same namespace ID for production and preview so both environments share saved searches; update the IDs there if the Cloudflare resources change.
 - **D1 (optional):**
   ```toml
   [[d1_databases]]
