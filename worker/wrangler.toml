@@ -9,4 +9,5 @@ crons = ["0 9 * * *"]
 [[kv_namespaces]]
 binding = "ALERTS"
 id = "58dd53b69c064ab9bdc86392f575233b"
+preview_id = "58dd53b69c064ab9bdc86392f575233b"
 
