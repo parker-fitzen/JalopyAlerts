@@ -1,0 +1,7 @@
+name = "jalopyalerts-worker"
+main = "worker.js"
+compatibility_date = "2024-08-01"
+
+[triggers]
+# Daily run at 09:00 UTC (2:00 a.m. MST) to refresh saved search alerts.
+crons = ["0 9 * * *"]
