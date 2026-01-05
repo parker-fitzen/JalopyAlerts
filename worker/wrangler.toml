@@ -5,3 +5,8 @@ compatibility_date = "2024-08-01"
 [triggers]
 # Daily run at 09:00 UTC (2:00 a.m. MST) to refresh saved search alerts.
 crons = ["0 9 * * *"]
+
+[[kv_namespaces]]
+binding = "ALERTS"
+id = "58dd53b69c064ab9bdc86392f575233b"
+
