@@ -19,7 +19,8 @@ const els = {
   searchBtn: document.getElementById("searchBtn"),
   resetBtn: document.getElementById("resetBtn"),
   status: document.getElementById("status"),
-  alertYear: document.getElementById("alertYear"),
+  alertMinYear: document.getElementById("alertMinYear"),
+  alertMaxYear: document.getElementById("alertMaxYear"),
   enablePushBtn: document.getElementById("enablePushBtn"),
   pushStatus: document.getElementById("pushStatus"),
   alertStatus: document.getElementById("alertStatus"),
@@ -169,9 +170,10 @@ function updateAlertNotes() {
     return;
   }
   const detail = selection.model ? `${selection.make} — ${selection.model}` : `${selection.make} (any model)`;
-  const year = (els.alertYear.value || "").trim();
-  const yearText = year ? ` for ${year}` : " (enter a year to save)";
-  els.alertNotes.textContent = `Alert will track: ${detail}${yearText}.`;
+  const minY = normalizeYear(els.alertMinYear.value);
+  const maxY = normalizeYear(els.alertMaxYear.value);
+  const yearText = describeYearRange(minY, maxY);
+  els.alertNotes.textContent = `Alert will track: ${detail} — ${yearText}.`;
 }
 
 function clearResults(message = "") {
@@ -251,6 +253,28 @@ function parseInventoryHtml(html) {
 function normalizeYear(v) {
   const n = Number(String(v || "").trim());
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function describeYearRange(minY, maxY) {
+  const hasMin = minY !== null;
+  const hasMax = maxY !== null;
+  if (!hasMin && !hasMax) return "all years";
+  if (hasMin && hasMax) {
+    if (minY === maxY) return `year ${minY}`;
+    return `${minY}–${maxY}`;
+  }
+  if (hasMin) return `from ${minY}`;
+  return `through ${maxY}`;
+}
+
+function extractAlertYearRange(alert) {
+  const minY = normalizeYear(alert?.VehicleMinYear ?? alert?.minYear);
+  const maxY = normalizeYear(alert?.VehicleMaxYear ?? alert?.maxYear);
+  const single = normalizeYear(alert?.VehicleYear ?? alert?.year);
+  return {
+    minYear: minY ?? single,
+    maxYear: maxY ?? single,
+  };
 }
 
 function applyFiltersAndRender() {
@@ -542,7 +566,9 @@ function renderAlerts(alerts, errorMsg = "") {
     const left = document.createElement("div");
     const headline = document.createElement("div");
     headline.className = "alert-primary";
-    headline.textContent = `${a.VehicleMake}${a.VehicleModel ? " — " + a.VehicleModel : " (any model)"} (${a.VehicleYear || "year?"})`;
+    const { minYear, maxYear } = extractAlertYearRange(a);
+    const yearText = describeYearRange(minYear, maxYear);
+    headline.textContent = `${a.VehicleMake}${a.VehicleModel ? " — " + a.VehicleModel : " (any model)"} (${yearText})`;
 
     const meta = document.createElement("div");
     meta.className = "alert-meta";
@@ -599,9 +625,10 @@ async function saveAlert() {
     return;
   }
 
-  const year = Number((els.alertYear.value || "").trim());
-  if (!Number.isFinite(year)) {
-    setAlertStatus("Enter the specific year to watch.", "err");
+  const minYear = normalizeYear(els.alertMinYear.value);
+  const maxYear = normalizeYear(els.alertMaxYear.value);
+  if (minYear !== null && maxYear !== null && minYear > maxYear) {
+    setAlertStatus("Year range is backwards (min > max).", "err");
     return;
   }
 
@@ -615,7 +642,9 @@ async function saveAlert() {
       body: {
         VehicleMake: selection.make,
         VehicleModel: selection.model,
-        VehicleYear: year,
+        VehicleMinYear: minYear,
+        VehicleMaxYear: maxYear,
+        VehicleYear: minYear !== null && minYear === maxYear ? minYear : null,
         subscription,
       },
     });
@@ -660,7 +689,8 @@ els.model.addEventListener("change", () => {
   updateAlertNotes();
 });
 
-els.alertYear.addEventListener("input", () => updateAlertNotes());
+els.alertMinYear.addEventListener("input", () => updateAlertNotes());
+els.alertMaxYear.addEventListener("input", () => updateAlertNotes());
 
 els.searchBtn.addEventListener("click", () => searchAllYards());
 
@@ -687,7 +717,8 @@ els.resetBtn.addEventListener("click", async () => {
   els.model.innerHTML = '<option value="">Select a make first</option>';
   els.model.disabled = true;
   els.searchBtn.disabled = true;
-  els.alertYear.value = "";
+  els.alertMinYear.value = "";
+  els.alertMaxYear.value = "";
   clearResults("Reset. Select a make.");
   els.yardCounts.innerHTML = "";
   setStatus("Reset.");
