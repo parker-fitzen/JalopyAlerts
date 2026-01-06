@@ -90,6 +90,39 @@
         Note: This fans out requests (one per yard). Keep usage reasonable so you don’t get your proxy or the upstream site blocked.
       </div>
     </div>
+
+    <div class="card" id="alertsCard">
+      <div class="row" style="justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <div>
+          <h2 style="margin: 0;">Saved alerts</h2>
+          <p class="muted" style="margin: 4px 0 0;">Save this search and get notified when new vehicles arrive.</p>
+        </div>
+        <button id="refreshAlertsBtn" class="secondary">Refresh saved alerts</button>
+      </div>
+
+      <div class="grid controls" style="margin-top: 12px;">
+        <div class="col-4">
+          <label for="alertYear">Alert year</label>
+          <input id="alertYear" type="number" placeholder="e.g., 2005" />
+        </div>
+        <div class="col-8">
+          <label for="alertNotes">What will be saved?</label>
+          <div id="alertNotes" class="muted" style="padding: 12px; border: 1px dashed var(--border); border-radius: 10px; background: #fffaf5;">
+            Pick a make/model above, then save the alert.
+          </div>
+        </div>
+        <div class="col-12">
+          <div class="muted-border" id="pushStatus">Push notifications are not enabled yet. Click below and allow notifications in your browser.</div>
+        </div>
+        <div class="col-12 row">
+          <button id="enablePushBtn" class="secondary">Enable browser notifications</button>
+          <button id="saveAlertBtn">Save alert for this search</button>
+          <span id="alertStatus" class="status"></span>
+        </div>
+      </div>
+
+      <div id="alertsList" class="alerts-list" aria-live="polite"></div>
+    </div>
   </main>
 
   <script src="scripts/app.js"></script>
