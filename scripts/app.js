@@ -1,5 +1,6 @@
 // Your deployed proxy Worker
 const BASE = "https://jalprox.parkfitz.workers.dev";
+const ALERTS_BASE = `${BASE}/alerts`;
 
 // Yard list (name + ID) from the upstream page
 const YARDS = [
@@ -18,6 +19,12 @@ const els = {
   searchBtn: document.getElementById("searchBtn"),
   resetBtn: document.getElementById("resetBtn"),
   status: document.getElementById("status"),
+  alertEmail: document.getElementById("alertEmail"),
+  alertStatus: document.getElementById("alertStatus"),
+  alertNotes: document.getElementById("alertNotes"),
+  saveAlertBtn: document.getElementById("saveAlertBtn"),
+  refreshAlertsBtn: document.getElementById("refreshAlertsBtn"),
+  alertsList: document.getElementById("alertsList"),
   results: document.getElementById("results"),
   yardCounts: document.getElementById("yardCounts"),
   quickFilter: document.getElementById("quickFilter"),
@@ -30,6 +37,7 @@ const modelsCache = new Map(); // make -> string[]
 
 // Last full result set (unfiltered by quick filter)
 let lastRows = [];
+let alertsCache = [];
 
 // Simple polite concurrency limiter
 async function runPool(tasks, limit = 2, delayMs = 120) {
@@ -57,6 +65,28 @@ async function runPool(tasks, limit = 2, delayMs = 120) {
 function setStatus(msg, kind = "") {
   els.status.className = "status" + (kind ? " " + kind : "");
   els.status.textContent = msg;
+}
+
+function setAlertStatus(msg, kind = "") {
+  els.alertStatus.className = "status" + (kind ? " " + kind : "");
+  els.alertStatus.textContent = msg;
+}
+
+function describeCurrentSelection() {
+  const make = (els.make.value || "").trim();
+  const model = (els.model.value || "").trim();
+  if (!make) return null;
+  return { make, model };
+}
+
+function updateAlertNotes() {
+  const selection = describeCurrentSelection();
+  if (!selection) {
+    els.alertNotes.textContent = "Pick a make/model above, then save the alert.";
+    return;
+  }
+  const detail = selection.model ? `${selection.make} — ${selection.model}` : `${selection.make} (any model)`;
+  els.alertNotes.textContent = `Alert will track: ${detail}.`;
 }
 
 function clearResults(message = "") {
@@ -89,6 +119,18 @@ async function postJson(path, bodyObj) {
   });
   if (!r.ok) throw new Error(`${path} failed: ${r.status}`);
   return await r.json();
+}
+
+async function alertsApi(path, { method = "GET", body } = {}) {
+  const opts = { method, headers: { "Content-Type": "application/json" } };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(ALERTS_BASE + path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const msg = data?.error || `${method} ${path} failed (${r.status})`;
+    throw new Error(msg);
+  }
+  return data;
 }
 
 async function postHtml(path, bodyObj) {
@@ -382,6 +424,128 @@ async function searchAllYards() {
   applyFiltersAndRender();
 }
 
+function formatTimestamp(ts) {
+  if (!ts) return "never";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts;
+  return d.toLocaleString();
+}
+
+function renderAlerts(alerts, errorMsg = "") {
+  els.alertsList.innerHTML = "";
+  if (errorMsg) {
+    const div = document.createElement("div");
+    div.className = "alert-row";
+    div.innerHTML = `<div class="alert-meta">${escapeHtml(errorMsg)}</div>`;
+    els.alertsList.appendChild(div);
+    return;
+  }
+
+  if (!alerts || !alerts.length) {
+    const div = document.createElement("div");
+    div.className = "alert-row";
+    div.innerHTML = `<div class="alert-meta">No saved alerts yet. Save one above.</div>`;
+    els.alertsList.appendChild(div);
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  for (const a of alerts) {
+    const row = document.createElement("div");
+    row.className = "alert-row";
+
+    const left = document.createElement("div");
+    const headline = document.createElement("div");
+    headline.className = "alert-primary";
+    headline.textContent = `${a.VehicleMake}${a.VehicleModel ? " — " + a.VehicleModel : " (any model)"}`;
+
+    const meta = document.createElement("div");
+    meta.className = "alert-meta";
+    meta.textContent = `Email: ${a.email || "n/a"} • Created ${formatTimestamp(a.createdAt)}`;
+
+    const statusLine = document.createElement("div");
+    statusLine.className = "alert-meta";
+    const status = a.lastNotificationStatus || "No notifications sent yet.";
+    statusLine.textContent = `Last notified: ${formatTimestamp(a.lastNotifiedAt)} (${status})`;
+
+    left.appendChild(headline);
+    left.appendChild(meta);
+    left.appendChild(statusLine);
+
+    const actions = document.createElement("div");
+    actions.className = "alert-actions";
+    const statusChip = document.createElement("span");
+    statusChip.className = "chip";
+    statusChip.textContent = a.lastNotificationStatus ? "Active" : "New";
+    actions.appendChild(statusChip);
+
+    const del = document.createElement("button");
+    del.className = "secondary";
+    del.textContent = "Delete";
+    del.addEventListener("click", () => deleteAlert(a.id));
+    actions.appendChild(del);
+
+    row.appendChild(left);
+    row.appendChild(actions);
+    frag.appendChild(row);
+  }
+
+  els.alertsList.appendChild(frag);
+}
+
+async function loadAlerts() {
+  try {
+    setAlertStatus("Loading saved alerts…");
+    const data = await alertsApi("", { method: "GET" });
+    alertsCache = data.alerts || [];
+    renderAlerts(alertsCache);
+    setAlertStatus(`Loaded ${alertsCache.length} alert(s).`, "ok");
+  } catch (e) {
+    alertsCache = [];
+    renderAlerts([], e.message || String(e));
+    setAlertStatus(e.message || "Failed to load alerts.", "err");
+  }
+}
+
+async function saveAlert() {
+  const selection = describeCurrentSelection();
+  if (!selection) {
+    setAlertStatus("Pick a make/model first.", "err");
+    return;
+  }
+
+  const email = (els.alertEmail.value || "").trim();
+  if (!email) {
+    setAlertStatus("Enter an email for notifications.", "err");
+    return;
+  }
+
+  setAlertStatus("Saving alert…");
+  try {
+    await alertsApi("", {
+      method: "POST",
+      body: { VehicleMake: selection.make, VehicleModel: selection.model, email },
+    });
+    setAlertStatus("Alert saved.", "ok");
+    await loadAlerts();
+  } catch (e) {
+    setAlertStatus(e.message || "Failed to save alert.", "err");
+  }
+}
+
+async function deleteAlert(id) {
+  if (!id) return;
+  setAlertStatus("Deleting alert…");
+  try {
+    await alertsApi(`/${encodeURIComponent(id)}`, { method: "DELETE" });
+    alertsCache = alertsCache.filter(a => a.id !== id);
+    renderAlerts(alertsCache);
+    setAlertStatus("Alert deleted.", "ok");
+  } catch (e) {
+    setAlertStatus(e.message || "Failed to delete alert.", "err");
+  }
+}
+
 // Event wiring
 els.make.addEventListener("change", async () => {
   const make = (els.make.value || "").trim();
@@ -391,6 +555,7 @@ els.make.addEventListener("change", async () => {
   els.yardCounts.innerHTML = "";
   await loadModelsAllYards(make);
   clearResults("Select a model (or Any), then search.");
+  updateAlertNotes();
 });
 
 els.model.addEventListener("change", () => {
@@ -398,9 +563,13 @@ els.model.addEventListener("change", () => {
   lastRows = [];
   clearResults("Ready to search.");
   els.yardCounts.innerHTML = "";
+  updateAlertNotes();
 });
 
 els.searchBtn.addEventListener("click", () => searchAllYards());
+
+els.saveAlertBtn.addEventListener("click", () => saveAlert());
+els.refreshAlertsBtn.addEventListener("click", () => loadAlerts());
 
 els.resetBtn.addEventListener("click", async () => {
   els.minYear.value = "";
@@ -416,6 +585,8 @@ els.resetBtn.addEventListener("click", async () => {
   clearResults("Reset. Select a make.");
   els.yardCounts.innerHTML = "";
   setStatus("Reset.");
+  updateAlertNotes();
+  setAlertStatus("");
 });
 
 els.quickFilter.addEventListener("input", () => {
@@ -436,6 +607,8 @@ els.maxYear.addEventListener("input", () => { if (lastRows.length) applyFiltersA
 (async function init() {
   try {
     await loadMakesAllYards();
+    updateAlertNotes();
+    await loadAlerts();
   } catch (e) {
     setStatus("Failed to load makes. Check Worker URL + CORS.", "err");
     els.make.disabled = true;
@@ -443,5 +616,6 @@ els.maxYear.addEventListener("input", () => { if (lastRows.length) applyFiltersA
     els.searchBtn.disabled = true;
     clearResults("Error loading makes.");
     console.error(e);
+    setAlertStatus("Alerts unavailable.", "err");
   }
 })();
