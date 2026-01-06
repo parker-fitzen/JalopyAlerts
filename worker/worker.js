@@ -6,6 +6,7 @@ const UPSTREAM = "https://inventory.pickapartjalopyjungle.com";
 const DAILY_ALERT_CRON = "0 9 * * *";
 
 const SAVED_SEARCHES_KV_KEY = "saved-searches";
+const VAPID_KEYS_KV_KEY = "alert-vapid-keys";
 const MAX_ALERTS_TOTAL = 500;
 const MAX_ALERTS_PER_OWNER = 25;
 const ALERT_ROUTE_PREFIX = "/alerts";
@@ -23,6 +24,8 @@ const PASSTHRU_PATHS = new Set(["/", "/Home/GetMakes", "/Home/GetModels"]);
 
 // These are handled by the worker (not forwarded):
 const API_PATHS = new Set(["/api/searchAll", "/api/makesAll", "/api/modelsAll"]);
+
+let cachedVapidKeys = null;
 
 export default {
   async fetch(request, env, ctx) {
@@ -378,19 +381,26 @@ function getSearchStore(env) {
 }
 
 async function handleAlerts(request, env, allowedOrigin = "*") {
-  const kv = getSearchStore(env);
-  if (!kv) return json({ error: "KV namespace not configured" }, 500, {}, allowedOrigin);
-
-  const ownerKey = await hashOwner(request, env);
   const url = new URL(request.url);
   const idFromPath = url.pathname.length > ALERT_ROUTE_PREFIX.length ? url.pathname.slice(ALERT_ROUTE_PREFIX.length + 1) : null;
 
   if (request.method === "GET") {
     if (url.pathname.endsWith("/public-key")) {
-      const pub = (env?.ALERT_VAPID_PUBLIC_KEY || env?.VAPID_PUBLIC_KEY || "").trim();
-      if (!pub) return json({ error: "Push not configured" }, 503, {}, allowedOrigin);
-      return json({ publicKey: pub }, 200, { "Cache-Control": "public, max-age=300" }, allowedOrigin);
+      const vapid = await getVapidKeys(env);
+      const body = {
+        publicKey: vapid.publicKey,
+        persistedToKV: vapid.persistedToKV,
+      };
+      if (vapid.persistenceError) {
+        body.persistenceError = vapid.persistenceError;
+      }
+      return json(body, 200, { "Cache-Control": "public, max-age=300" }, allowedOrigin);
     }
+
+    const kv = getSearchStore(env);
+    if (!kv) return json({ error: "KV namespace not configured" }, 500, {}, allowedOrigin);
+
+    const ownerKey = await hashOwner(request, env);
 
     const saved = await kv.get(SAVED_SEARCHES_KV_KEY, { type: "json" });
     const searches = Array.isArray(saved) ? saved : [];
@@ -399,6 +409,10 @@ async function handleAlerts(request, env, allowedOrigin = "*") {
   }
 
   if (request.method === "POST") {
+    const kv = getSearchStore(env);
+    if (!kv) return json({ error: "KV namespace not configured" }, 500, {}, allowedOrigin);
+
+    const ownerKey = await hashOwner(request, env);
     const payload = await readBodyParams(request);
     let validated;
     try {
@@ -457,6 +471,10 @@ async function handleAlerts(request, env, allowedOrigin = "*") {
   }
 
   if (request.method === "DELETE") {
+    const kv = getSearchStore(env);
+    if (!kv) return json({ error: "KV namespace not configured" }, 500, {}, allowedOrigin);
+
+    const ownerKey = await hashOwner(request, env);
     const id = (idFromPath || url.searchParams.get("id") || "").trim();
     if (!id) return json({ error: "id is required" }, 400, {}, allowedOrigin);
 
@@ -564,9 +582,9 @@ function normalizeSubscription(sub) {
 
 async function deliverNotifications(search, newVehicles, env) {
   const payload = buildNotificationPayload(search, newVehicles);
-  const vapid = getVapidConfig(env);
+  const vapid = await getVapidKeys(env);
 
-  if (!vapid) return { status: "push unavailable (missing VAPID keys)", payload };
+  if (!vapid?.publicKey || !vapid?.privateKey) return { status: "push unavailable (missing VAPID keys)", payload };
 
   if (!search?.pushEndpoint) {
     return { status: "no push subscription", payload };
@@ -610,15 +628,81 @@ function buildNotificationPayload(search, newVehicles) {
   };
 }
 
-function getVapidConfig(env) {
+async function getVapidKeys(env) {
+  const subject = (env?.ALERT_VAPID_SUBJECT || env?.VAPID_SUBJECT || "mailto:alerts@example.com").trim();
   const publicKey = (env?.ALERT_VAPID_PUBLIC_KEY || env?.VAPID_PUBLIC_KEY || "").trim();
   const privateKey = (env?.ALERT_VAPID_PRIVATE_KEY || env?.VAPID_PRIVATE_KEY || "").trim();
-  if (!publicKey || !privateKey) return null;
-  return {
-    publicKey,
-    privateKey,
-    subject: (env?.ALERT_VAPID_SUBJECT || env?.VAPID_SUBJECT || "mailto:alerts@example.com").trim(),
-  };
+  const kv = getVapidKeyStore(env);
+
+  if (publicKey && privateKey) {
+    cachedVapidKeys = { publicKey, privateKey, subject, persistedToKV: false, persistenceError: null };
+    return cachedVapidKeys;
+  }
+
+  if (cachedVapidKeys) {
+    if (kv && !cachedVapidKeys.persistedToKV) {
+      try {
+        await kv.put(
+          VAPID_KEYS_KV_KEY,
+          JSON.stringify({ publicKey: cachedVapidKeys.publicKey, privateKey: cachedVapidKeys.privateKey, subject })
+        );
+        cachedVapidKeys.persistedToKV = true;
+        cachedVapidKeys.persistenceError = null;
+      } catch (err) {
+        cachedVapidKeys.persistenceError = `KV write failed: ${String(err?.message || err)}`;
+        console.error("vapid kv write failed", { error: err });
+      }
+    }
+    return cachedVapidKeys;
+  }
+
+  let persistenceError = kv ? null : "KV namespace not configured for VAPID keys";
+
+  if (kv) {
+    try {
+      const stored = await kv.get(VAPID_KEYS_KV_KEY, { type: "json" });
+      if (stored?.publicKey && stored?.privateKey) {
+        cachedVapidKeys = {
+          publicKey: stored.publicKey,
+          privateKey: stored.privateKey,
+          subject: stored.subject || subject,
+          persistedToKV: true,
+          persistenceError: null,
+        };
+        return cachedVapidKeys;
+      }
+    } catch (err) {
+      persistenceError = `KV read failed: ${String(err?.message || err)}`;
+      console.error("vapid kv read failed", { error: err });
+    }
+  }
+
+  const generated = await generateVapidKeyPair(subject);
+  cachedVapidKeys = { ...generated, persistedToKV: false, persistenceError };
+
+  if (kv) {
+    try {
+      await kv.put(VAPID_KEYS_KV_KEY, JSON.stringify({ publicKey: generated.publicKey, privateKey: generated.privateKey, subject }));
+      cachedVapidKeys.persistedToKV = true;
+      cachedVapidKeys.persistenceError = null;
+    } catch (err) {
+      cachedVapidKeys.persistenceError = `KV write failed: ${String(err?.message || err)}`;
+      console.error("vapid kv write failed", { error: err });
+    }
+  }
+
+  return cachedVapidKeys;
+}
+
+function getVapidKeyStore(env) {
+  return env?.ALERT_VAPID_KEYS || env?.VAPID_KEYS || getSearchStore(env);
+}
+
+async function generateVapidKeyPair(subject) {
+  const keyPair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const publicKey = await crypto.subtle.exportKey("raw", keyPair.publicKey);
+  const privateKey = await crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
+  return { publicKey: base64UrlEncode(publicKey, true), privateKey: base64UrlEncode(privateKey, true), subject };
 }
 
 async function sendWebPush({ endpoint, vapid }) {
