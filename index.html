@@ -102,10 +102,14 @@
 
       <div class="grid controls" style="margin-top: 12px;">
         <div class="col-4">
-          <label for="alertYear">Alert year</label>
-          <input id="alertYear" type="number" placeholder="e.g., 2005" />
+          <label for="alertMinYear">Alert min year (optional)</label>
+          <input id="alertMinYear" type="number" placeholder="Use a range or leave blank for all years" />
         </div>
-        <div class="col-8">
+        <div class="col-4">
+          <label for="alertMaxYear">Alert max year (optional)</label>
+          <input id="alertMaxYear" type="number" placeholder="Use a range or leave blank for all years" />
+        </div>
+        <div class="col-4">
           <label for="alertNotes">What will be saved?</label>
           <div id="alertNotes" class="muted" style="padding: 12px; border: 1px dashed var(--border); border-radius: 10px; background: #fffaf5;">
             Pick a make/model above, then save the alert.

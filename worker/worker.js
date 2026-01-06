@@ -347,7 +347,7 @@ async function rerunSavedSearches(env) {
 async function runSavedSearch(search) {
   const VehicleMake = (search?.VehicleMake || search?.make || "").toString().trim();
   const VehicleModel = (search?.VehicleModel || search?.model || "").toString().trim();
-  const VehicleYear = Number(search?.VehicleYear || search?.year);
+  const { minYear, maxYear } = deriveYearRange(search);
 
   if (!VehicleMake) return [];
 
@@ -363,8 +363,45 @@ async function runSavedSearch(search) {
 
   const all = await runPool(jobs, 2);
   const flattened = all.flat();
-  if (!VehicleYear || !Number.isFinite(VehicleYear)) return flattened;
-  return flattened.filter((r) => Number(r.year) === VehicleYear);
+  return flattened.filter((r) => {
+    if (minYear !== null && Number(r.year) < minYear) return false;
+    if (maxYear !== null && Number(r.year) > maxYear) return false;
+    return true;
+  });
+}
+
+function deriveYearRange(source, { strict = false } = {}) {
+  const minYear = parseOptionalYear(source?.VehicleMinYear ?? source?.minYear, { strict });
+  const maxYear = parseOptionalYear(source?.VehicleMaxYear ?? source?.maxYear, { strict });
+  const singleYear = parseOptionalYear(source?.VehicleYear ?? source?.year, { strict });
+
+  let normalizedMin = minYear ?? singleYear;
+  let normalizedMax = maxYear ?? singleYear;
+
+  if (normalizedMin !== null && normalizedMax !== null && normalizedMin > normalizedMax) {
+    if (strict) throw new Error("VehicleMinYear must be before VehicleMaxYear");
+    const hi = Math.max(normalizedMin, normalizedMax);
+    normalizedMin = Math.min(normalizedMin, normalizedMax);
+    normalizedMax = hi;
+  }
+
+  return { minYear: normalizedMin, maxYear: normalizedMax };
+}
+
+function parseOptionalYear(value, { strict = false } = {}) {
+  const text = (value ?? "").toString().trim();
+  if (!text) return null;
+  const n = Number(text);
+  const valid = Number.isFinite(n) && n >= 1900 && n <= 2100;
+  if (!valid) {
+    if (strict) throw new Error("Vehicle year must be between 1900 and 2100.");
+    return null;
+  }
+  return n;
+}
+
+function yearRangesEqual(a, b) {
+  return (a?.minYear ?? null) === (b?.minYear ?? null) && (a?.maxYear ?? null) === (b?.maxYear ?? null);
 }
 
 function diffNewVehicles(current, previous) {
@@ -433,13 +470,16 @@ async function handleAlerts(request, env, allowedOrigin = "*") {
       return json({ error: "Too many saved alerts. Delete one before adding another." }, 429, {}, allowedOrigin);
     }
 
-    const duplicate = mine.find(
-      (s) =>
+    const desiredRange = deriveYearRange(validated);
+    const duplicate = mine.find((s) => {
+      const range = deriveYearRange(s);
+      return (
         normalizeText(s.VehicleMake) === validated.VehicleMake &&
         normalizeText(s.VehicleModel || "") === normalizeText(validated.VehicleModel || "") &&
-        Number(s.VehicleYear) === validated.VehicleYear &&
+        yearRangesEqual(range, desiredRange) &&
         normalizeText(s.pushEndpoint || "") === normalizeText(validated.pushEndpoint || "")
-    );
+      );
+    });
     if (duplicate) {
       return json({ error: "You already saved this search." }, 409, {}, allowedOrigin);
     }
@@ -452,6 +492,8 @@ async function handleAlerts(request, env, allowedOrigin = "*") {
       VehicleMake: validated.VehicleMake,
       VehicleModel: validated.VehicleModel || "",
       VehicleYear: validated.VehicleYear,
+      VehicleMinYear: validated.VehicleMinYear ?? null,
+      VehicleMaxYear: validated.VehicleMaxYear ?? null,
       pushEndpoint: validated.pushEndpoint || null,
       pushAuth: validated.pushAuth || null,
       pushP256dh: validated.pushP256dh || null,
@@ -523,6 +565,8 @@ function redactSearchForClient(search) {
     VehicleMake,
     VehicleModel,
     VehicleYear: VehicleYear ?? null,
+    VehicleMinYear: search?.VehicleMinYear ?? null,
+    VehicleMaxYear: search?.VehicleMaxYear ?? null,
     hasPush: !!pushEndpoint,
     createdAt,
     lastNotifiedAt: lastNotifiedAt || null,
@@ -533,7 +577,7 @@ function redactSearchForClient(search) {
 async function validateAlertPayload(payload) {
   const VehicleMake = normalizeText(payload.VehicleMake || payload.make || "");
   const VehicleModel = normalizeText(payload.VehicleModel || payload.model || "");
-  const VehicleYear = Number((payload.VehicleYear || payload.year || "").toString().trim());
+  const { minYear, maxYear } = deriveYearRange(payload, { strict: true });
   const subscription = normalizeSubscription(payload.subscription || payload.pushSubscription || null);
   const pushEndpoint = subscription?.endpoint || normalizeText(payload.pushEndpoint || "");
   const pushAuth = subscription?.auth || normalizeText(payload.pushAuth || "");
@@ -542,15 +586,21 @@ async function validateAlertPayload(payload) {
   if (!VehicleMake) throw new Error("VehicleMake is required");
   if (VehicleMake.length > 48) throw new Error("VehicleMake too long");
   if (VehicleModel.length > 64) throw new Error("VehicleModel too long");
-  if (!Number.isFinite(VehicleYear) || VehicleYear < 1900 || VehicleYear > 2100) {
-    throw new Error("VehicleYear must be a valid year");
-  }
 
   if (!pushEndpoint || !pushAuth || !pushP256dh) {
     throw new Error("Push subscription (endpoint, auth, p256dh) is required");
   }
 
-  return { VehicleMake, VehicleModel, VehicleYear, pushEndpoint, pushAuth, pushP256dh };
+  return {
+    VehicleMake,
+    VehicleModel,
+    VehicleMinYear: minYear,
+    VehicleMaxYear: maxYear,
+    VehicleYear: minYear !== null && minYear === maxYear ? minYear : null,
+    pushEndpoint,
+    pushAuth,
+    pushP256dh,
+  };
 }
 
 async function hashOwner(request, env) {
@@ -614,7 +664,7 @@ function pickAllowedOrigin(request, env) {
 }
 
 function buildNotificationPayload(search, newVehicles) {
-  const detail = `${search.VehicleYear} ${search.VehicleMake}${search.VehicleModel ? ` ${search.VehicleModel}` : ""}`;
+  const detail = `${describeYearRangeText(search)} ${search.VehicleMake}${search.VehicleModel ? ` ${search.VehicleModel}` : ""}`;
   const yardNames = Array.from(new Set(newVehicles.map((r) => r.yardName))).join(", ");
   const body = `${newVehicles.length} new arrival(s) at ${yardNames || "unknown yard"}.`;
   return {
@@ -626,6 +676,17 @@ function buildNotificationPayload(search, newVehicles) {
       yards: yardNames,
     },
   };
+}
+
+function describeYearRangeText(search) {
+  const { minYear, maxYear } = deriveYearRange(search);
+  if (minYear === null && maxYear === null) return "All years";
+  if (minYear !== null && maxYear !== null) {
+    if (minYear === maxYear) return `${minYear}`;
+    return `${minYear}–${maxYear}`;
+  }
+  if (minYear !== null) return `${minYear}+`;
+  return `≤${maxYear}`;
 }
 
 async function getVapidKeys(env) {
