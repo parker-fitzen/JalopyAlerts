@@ -34,13 +34,16 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(allowedOrigin) });
     }
 
-    if (url.pathname.startsWith(ALERT_ROUTE_PREFIX)) {
-      try {
-        return await handleAlerts(request, env, allowedOrigin);
-      } catch (err) {
-        return json({ error: String(err?.message || err) }, 500, {}, allowedOrigin);
+  if (url.pathname.startsWith(ALERT_ROUTE_PREFIX)) {
+    try {
+      if (url.pathname === `${ALERT_ROUTE_PREFIX}/notification` && request.method === "POST") {
+        return await handleNotificationPoll(request, env, allowedOrigin);
       }
+      return await handleAlerts(request, env, allowedOrigin);
+    } catch (err) {
+      return json({ error: String(err?.message || err) }, 500, {}, allowedOrigin);
     }
+  }
 
     // ---- Worker-handled API endpoints ----
     if (API_PATHS.has(url.pathname)) {
@@ -328,7 +331,8 @@ async function rerunSavedSearches(env) {
     if (newVehicles.length) {
       const delivery = await deliverNotifications(search, newVehicles, env);
       next.lastNotifiedAt = new Date().toISOString();
-      next.lastNotificationStatus = delivery;
+      next.lastNotificationStatus = delivery.status;
+      next.lastNotificationPayload = delivery.payload;
     }
 
     refreshed.push(next);
@@ -382,6 +386,12 @@ async function handleAlerts(request, env, allowedOrigin = "*") {
   const idFromPath = url.pathname.length > ALERT_ROUTE_PREFIX.length ? url.pathname.slice(ALERT_ROUTE_PREFIX.length + 1) : null;
 
   if (request.method === "GET") {
+    if (url.pathname.endsWith("/public-key")) {
+      const pub = (env?.ALERT_VAPID_PUBLIC_KEY || env?.VAPID_PUBLIC_KEY || "").trim();
+      if (!pub) return json({ error: "Push not configured" }, 503, {}, allowedOrigin);
+      return json({ publicKey: pub }, 200, { "Cache-Control": "public, max-age=300" }, allowedOrigin);
+    }
+
     const saved = await kv.get(SAVED_SEARCHES_KV_KEY, { type: "json" });
     const searches = Array.isArray(saved) ? saved : [];
     const mine = searches.filter((s) => s.ownerKey === ownerKey);
@@ -463,6 +473,31 @@ async function handleAlerts(request, env, allowedOrigin = "*") {
   return json({ error: "Method not allowed" }, 405, {}, allowedOrigin);
 }
 
+async function handleNotificationPoll(request, env, allowedOrigin = "*") {
+  const kv = getSearchStore(env);
+  if (!kv) return json({ error: "KV namespace not configured" }, 500, {}, allowedOrigin);
+
+  const body = await readBodyParams(request);
+  const endpoint = normalizeText(body.endpoint || "");
+  if (!endpoint) return json({ error: "endpoint is required" }, 400, {}, allowedOrigin);
+
+  const saved = await kv.get(SAVED_SEARCHES_KV_KEY, { type: "json" });
+  const searches = Array.isArray(saved) ? saved : [];
+  const match = searches.find((s) => normalizeText(s.pushEndpoint || "") === endpoint);
+  if (!match) return json({ notification: null }, 200, {}, allowedOrigin);
+
+  return json(
+    {
+      notification: match.lastNotificationPayload || null,
+      lastNotifiedAt: match.lastNotifiedAt || null,
+      lastNotificationStatus: match.lastNotificationStatus || null,
+    },
+    200,
+    {},
+    allowedOrigin
+  );
+}
+
 function redactSearchForClient(search) {
   const { id, VehicleMake, VehicleModel, VehicleYear, createdAt, lastNotifiedAt, lastNotificationStatus, pushEndpoint } = search || {};
   return {
@@ -481,9 +516,10 @@ async function validateAlertPayload(payload) {
   const VehicleMake = normalizeText(payload.VehicleMake || payload.make || "");
   const VehicleModel = normalizeText(payload.VehicleModel || payload.model || "");
   const VehicleYear = Number((payload.VehicleYear || payload.year || "").toString().trim());
-  const pushEndpoint = normalizeText(payload.pushEndpoint || "");
-  const pushAuth = normalizeText(payload.pushAuth || "");
-  const pushP256dh = normalizeText(payload.pushP256dh || "");
+  const subscription = normalizeSubscription(payload.subscription || payload.pushSubscription || null);
+  const pushEndpoint = subscription?.endpoint || normalizeText(payload.pushEndpoint || "");
+  const pushAuth = subscription?.auth || normalizeText(payload.pushAuth || "");
+  const pushP256dh = subscription?.p256dh || normalizeText(payload.pushP256dh || "");
 
   if (!VehicleMake) throw new Error("VehicleMake is required");
   if (VehicleMake.length > 48) throw new Error("VehicleMake too long");
@@ -517,53 +553,34 @@ function normalizeText(v) {
   return (v || "").toString().trim();
 }
 
-async function deliverNotifications(search, newVehicles, env) {
-  if (search?.pushEndpoint && env?.ALERT_PUSH_ENDPOINT && env?.ALERT_PUSH_API_KEY) {
-    const deliveries = [
-      sendPushNotification({
-        endpoint: search.pushEndpoint,
-        auth: search.pushAuth,
-        p256dh: search.pushP256dh,
-        apiKey: env.ALERT_PUSH_API_KEY,
-        gateway: env.ALERT_PUSH_ENDPOINT,
-        search,
-        newVehicles,
-      }),
-    ];
-
-    const results = await Promise.allSettled(deliveries);
-    return results
-      .map((r) => (r.status === "fulfilled" ? r.value : `error: ${String(r.reason?.message || r.reason)}`))
-      .join("; ");
-  }
-
-  return "no push subscription";
+function normalizeSubscription(sub) {
+  if (!sub || typeof sub !== "object") return null;
+  const endpoint = normalizeText(sub.endpoint || "");
+  const auth = normalizeText(sub.keys?.auth || sub.auth || "");
+  const p256dh = normalizeText(sub.keys?.p256dh || sub.p256dh || "");
+  if (!endpoint || !auth || !p256dh) return null;
+  return { endpoint, auth, p256dh };
 }
 
-async function sendPushNotification({ endpoint, auth, p256dh, apiKey, gateway, search, newVehicles }) {
-  const payload = {
-    endpoint,
-    keys: { auth, p256dh },
-    search: { make: search.VehicleMake, model: search.VehicleModel || null, year: search.VehicleYear },
-    count: newVehicles.length,
-    sample: newVehicles.slice(0, 5),
-  };
+async function deliverNotifications(search, newVehicles, env) {
+  const payload = buildNotificationPayload(search, newVehicles);
+  const vapid = getVapidConfig(env);
 
-  const resp = await fetch(gateway, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(payload),
-  });
+  if (!vapid) return { status: "push unavailable (missing VAPID keys)", payload };
 
-  if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`push failed (${resp.status}): ${txt}`);
+  if (!search?.pushEndpoint) {
+    return { status: "no push subscription", payload };
   }
 
-  return "push sent";
+  try {
+    await sendWebPush({
+      endpoint: search.pushEndpoint,
+      vapid,
+    });
+    return { status: "push sent", payload };
+  } catch (err) {
+    return { status: `push failed: ${String(err?.message || err)}`, payload };
+  }
 }
 
 function pickAllowedOrigin(request, env) {
@@ -576,4 +593,85 @@ function pickAllowedOrigin(request, env) {
     .filter(Boolean);
   if (allowed.includes(reqOrigin)) return reqOrigin;
   return allowed[0] || "*";
+}
+
+function buildNotificationPayload(search, newVehicles) {
+  const detail = `${search.VehicleYear} ${search.VehicleMake}${search.VehicleModel ? ` ${search.VehicleModel}` : ""}`;
+  const yardNames = Array.from(new Set(newVehicles.map((r) => r.yardName))).join(", ");
+  const body = `${newVehicles.length} new arrival(s) at ${yardNames || "unknown yard"}.`;
+  return {
+    title: `Jalopy Alerts: ${detail}`,
+    body,
+    data: {
+      alertId: search.id,
+      count: newVehicles.length,
+      yards: yardNames,
+    },
+  };
+}
+
+function getVapidConfig(env) {
+  const publicKey = (env?.ALERT_VAPID_PUBLIC_KEY || env?.VAPID_PUBLIC_KEY || "").trim();
+  const privateKey = (env?.ALERT_VAPID_PRIVATE_KEY || env?.VAPID_PRIVATE_KEY || "").trim();
+  if (!publicKey || !privateKey) return null;
+  return {
+    publicKey,
+    privateKey,
+    subject: (env?.ALERT_VAPID_SUBJECT || env?.VAPID_SUBJECT || "mailto:alerts@example.com").trim(),
+  };
+}
+
+async function sendWebPush({ endpoint, vapid }) {
+  const aud = new URL(endpoint).origin;
+  const token = await createVapidJwt({ aud, vapid });
+  const headers = {
+    TTL: "43200",
+    Authorization: `vapid t=${token}, k=${vapid.publicKey}`,
+  };
+
+  // Send a minimal payload-free push; the service worker will fetch details.
+  const resp = await fetch(endpoint, { method: "POST", headers });
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`push failed (${resp.status}): ${txt}`);
+  }
+
+  return "push sent";
+}
+
+async function createVapidJwt({ aud, vapid }) {
+  const now = Math.floor(Date.now() / 1000);
+  const exp = now + 12 * 60 * 60; // 12h
+  const header = { alg: "ES256", typ: "JWT" };
+  const payload = { aud, exp, sub: vapid.subject };
+
+  const unsigned = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(JSON.stringify(payload))}`;
+  const keyData = base64UrlToUint8Array(vapid.privateKey);
+
+  const key = await crypto.subtle.importKey(
+    "pkcs8",
+    keyData,
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign"]
+  );
+
+  const signature = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, new TextEncoder().encode(unsigned));
+  return `${unsigned}.${base64UrlEncode(signature, true)}`;
+}
+
+function base64UrlEncode(input, isBuffer = false) {
+  const raw = isBuffer ? new Uint8Array(input) : new TextEncoder().encode(input);
+  let str = btoa(String.fromCharCode(...raw));
+  str = str.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return str;
+}
+
+function base64UrlToUint8Array(base64String) {
+  const padded = base64String.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(padded);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
 }

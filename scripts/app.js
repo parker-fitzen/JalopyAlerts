@@ -20,9 +20,8 @@ const els = {
   resetBtn: document.getElementById("resetBtn"),
   status: document.getElementById("status"),
   alertYear: document.getElementById("alertYear"),
-  alertPushEndpoint: document.getElementById("alertPushEndpoint"),
-  alertPushAuth: document.getElementById("alertPushAuth"),
-  alertPushP256dh: document.getElementById("alertPushP256dh"),
+  enablePushBtn: document.getElementById("enablePushBtn"),
+  pushStatus: document.getElementById("pushStatus"),
   alertStatus: document.getElementById("alertStatus"),
   alertNotes: document.getElementById("alertNotes"),
   saveAlertBtn: document.getElementById("saveAlertBtn"),
@@ -41,6 +40,9 @@ const modelsCache = new Map(); // make -> string[]
 // Last full result set (unfiltered by quick filter)
 let lastRows = [];
 let alertsCache = [];
+let pushSubscription = null;
+let vapidPublicKey = null;
+let swReadyPromise = null;
 
 // Simple polite concurrency limiter
 async function runPool(tasks, limit = 2, delayMs = 120) {
@@ -75,11 +77,89 @@ function setAlertStatus(msg, kind = "") {
   els.alertStatus.textContent = msg;
 }
 
+function setPushStatus(msg, kind = "") {
+  if (!els.pushStatus) return;
+  els.pushStatus.className = "muted-border" + (kind ? " " + kind : "");
+  els.pushStatus.textContent = msg;
+}
+
 function describeCurrentSelection() {
   const make = (els.make.value || "").trim();
   const model = (els.model.value || "").trim();
   if (!make) return null;
   return { make, model };
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
+async function ensureServiceWorkerReady() {
+  if (!("serviceWorker" in navigator)) throw new Error("Service workers not supported in this browser.");
+  if (!swReadyPromise) {
+    swReadyPromise = navigator.serviceWorker.register("/sw.js").then(() => navigator.serviceWorker.ready);
+  }
+  return swReadyPromise;
+}
+
+async function fetchVapidKey() {
+  if (vapidPublicKey) return vapidPublicKey;
+  const data = await alertsApi("/public-key", { method: "GET" });
+  vapidPublicKey = data.publicKey;
+  return vapidPublicKey;
+}
+
+async function ensurePushSubscription() {
+  if (!("Notification" in window) || !("PushManager" in window)) {
+    throw new Error("Push notifications are not supported in this browser.");
+  }
+
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") throw new Error("Notification permission not granted.");
+
+  const reg = await ensureServiceWorkerReady();
+  const existing = await reg.pushManager.getSubscription();
+  if (existing) {
+    pushSubscription = existing;
+    return existing;
+  }
+
+  const publicKey = await fetchVapidKey();
+  const sub = await reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(publicKey),
+  });
+  pushSubscription = sub;
+  return sub;
+}
+
+async function updatePushStatusText() {
+  try {
+    const reg = await ensureServiceWorkerReady();
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      pushSubscription = sub;
+      setPushStatus("Push notifications are active for this browser.", "ok");
+    } else {
+      setPushStatus("Push notifications are not enabled yet. Click below and accept the prompt to turn them on.");
+    }
+  } catch (e) {
+    setPushStatus(e.message || "Push notifications are unavailable.", "err");
+  }
+}
+
+function subscriptionPayload(sub) {
+  const json = sub?.toJSON?.();
+  if (!json) return null;
+  return {
+    endpoint: json.endpoint,
+    keys: json.keys || {},
+  };
 }
 
 function updateAlertNotes() {
@@ -525,30 +605,23 @@ async function saveAlert() {
     return;
   }
 
-  const pushEndpoint = (els.alertPushEndpoint.value || "").trim();
-  const pushAuth = (els.alertPushAuth.value || "").trim();
-  const pushP256dh = (els.alertPushP256dh.value || "").trim();
-
-  if (!pushEndpoint || !pushAuth || !pushP256dh) {
-    setAlertStatus("Provide push endpoint, auth, and p256dh from your browser subscription.", "err");
-    return;
-  }
-
   setAlertStatus("Saving alert…");
   try {
+    const sub = await ensurePushSubscription();
+    const subscription = subscriptionPayload(sub);
+
     await alertsApi("", {
       method: "POST",
       body: {
         VehicleMake: selection.make,
         VehicleModel: selection.model,
         VehicleYear: year,
-        pushEndpoint,
-        pushAuth,
-        pushP256dh,
+        subscription,
       },
     });
     setAlertStatus("Alert saved.", "ok");
     await loadAlerts();
+    await updatePushStatusText();
   } catch (e) {
     setAlertStatus(e.message || "Failed to save alert.", "err");
   }
@@ -593,6 +666,15 @@ els.searchBtn.addEventListener("click", () => searchAllYards());
 
 els.saveAlertBtn.addEventListener("click", () => saveAlert());
 els.refreshAlertsBtn.addEventListener("click", () => loadAlerts());
+els.enablePushBtn.addEventListener("click", async () => {
+  setPushStatus("Requesting permission…");
+  try {
+    await ensurePushSubscription();
+    setPushStatus("Push notifications are active for this browser.", "ok");
+  } catch (e) {
+    setPushStatus(e.message || "Push permission denied.", "err");
+  }
+});
 
 els.resetBtn.addEventListener("click", async () => {
   els.minYear.value = "";
@@ -606,14 +688,12 @@ els.resetBtn.addEventListener("click", async () => {
   els.model.disabled = true;
   els.searchBtn.disabled = true;
   els.alertYear.value = "";
-  els.alertPushEndpoint.value = "";
-  els.alertPushAuth.value = "";
-  els.alertPushP256dh.value = "";
   clearResults("Reset. Select a make.");
   els.yardCounts.innerHTML = "";
   setStatus("Reset.");
   updateAlertNotes();
   setAlertStatus("");
+  updatePushStatusText();
 });
 
 els.quickFilter.addEventListener("input", () => {
@@ -636,6 +716,7 @@ els.maxYear.addEventListener("input", () => { if (lastRows.length) applyFiltersA
     await loadMakesAllYards();
     updateAlertNotes();
     await loadAlerts();
+    await updatePushStatusText();
   } catch (e) {
     setStatus("Failed to load makes. Check Worker URL + CORS.", "err");
     els.make.disabled = true;

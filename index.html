@@ -112,18 +112,10 @@
           </div>
         </div>
         <div class="col-12">
-          <label for="alertPushEndpoint">Push endpoint (from browser subscription)</label>
-          <textarea id="alertPushEndpoint" rows="2" placeholder="https://push-service.example/..." spellcheck="false"></textarea>
-        </div>
-        <div class="col-6">
-          <label for="alertPushAuth">Push auth</label>
-          <input id="alertPushAuth" type="text" placeholder="Base64 auth" spellcheck="false" />
-        </div>
-        <div class="col-6">
-          <label for="alertPushP256dh">Push p256dh</label>
-          <input id="alertPushP256dh" type="text" placeholder="Base64 p256dh" spellcheck="false" />
+          <div class="muted-border" id="pushStatus">Push notifications are not enabled yet. Click below and allow notifications in your browser.</div>
         </div>
         <div class="col-12 row">
+          <button id="enablePushBtn" class="secondary">Enable browser notifications</button>
           <button id="saveAlertBtn">Save alert for this search</button>
           <span id="alertStatus" class="status"></span>
         </div>
