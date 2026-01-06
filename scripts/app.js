@@ -1,6 +1,5 @@
 // Your deployed proxy Worker
 const BASE = "https://jalprox.parkfitz.workers.dev";
-const ALERTS_BASE = `${BASE}/alerts`;
 
 // Yard list (name + ID) from the upstream page
 const YARDS = [
@@ -19,14 +18,6 @@ const els = {
   searchBtn: document.getElementById("searchBtn"),
   resetBtn: document.getElementById("resetBtn"),
   status: document.getElementById("status"),
-  alertYear: document.getElementById("alertYear"),
-  enablePushBtn: document.getElementById("enablePushBtn"),
-  pushStatus: document.getElementById("pushStatus"),
-  alertStatus: document.getElementById("alertStatus"),
-  alertNotes: document.getElementById("alertNotes"),
-  saveAlertBtn: document.getElementById("saveAlertBtn"),
-  refreshAlertsBtn: document.getElementById("refreshAlertsBtn"),
-  alertsList: document.getElementById("alertsList"),
   results: document.getElementById("results"),
   yardCounts: document.getElementById("yardCounts"),
   quickFilter: document.getElementById("quickFilter"),
@@ -39,10 +30,6 @@ const modelsCache = new Map(); // make -> string[]
 
 // Last full result set (unfiltered by quick filter)
 let lastRows = [];
-let alertsCache = [];
-let pushSubscription = null;
-let vapidPublicKey = null;
-let swReadyPromise = null;
 
 // Simple polite concurrency limiter
 async function runPool(tasks, limit = 2, delayMs = 120) {
@@ -70,108 +57,6 @@ async function runPool(tasks, limit = 2, delayMs = 120) {
 function setStatus(msg, kind = "") {
   els.status.className = "status" + (kind ? " " + kind : "");
   els.status.textContent = msg;
-}
-
-function setAlertStatus(msg, kind = "") {
-  els.alertStatus.className = "status" + (kind ? " " + kind : "");
-  els.alertStatus.textContent = msg;
-}
-
-function setPushStatus(msg, kind = "") {
-  if (!els.pushStatus) return;
-  els.pushStatus.className = "muted-border" + (kind ? " " + kind : "");
-  els.pushStatus.textContent = msg;
-}
-
-function describeCurrentSelection() {
-  const make = (els.make.value || "").trim();
-  const model = (els.model.value || "").trim();
-  if (!make) return null;
-  return { make, model };
-}
-
-function urlBase64ToUint8Array(base64String) {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const rawData = atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
-  return outputArray;
-}
-
-async function ensureServiceWorkerReady() {
-  if (!("serviceWorker" in navigator)) throw new Error("Service workers not supported in this browser.");
-  if (!swReadyPromise) {
-    swReadyPromise = navigator.serviceWorker.register("/sw.js").then(() => navigator.serviceWorker.ready);
-  }
-  return swReadyPromise;
-}
-
-async function fetchVapidKey() {
-  if (vapidPublicKey) return vapidPublicKey;
-  const data = await alertsApi("/public-key", { method: "GET" });
-  vapidPublicKey = data.publicKey;
-  return vapidPublicKey;
-}
-
-async function ensurePushSubscription() {
-  if (!("Notification" in window) || !("PushManager" in window)) {
-    throw new Error("Push notifications are not supported in this browser.");
-  }
-
-  const permission = await Notification.requestPermission();
-  if (permission !== "granted") throw new Error("Notification permission not granted.");
-
-  const reg = await ensureServiceWorkerReady();
-  const existing = await reg.pushManager.getSubscription();
-  if (existing) {
-    pushSubscription = existing;
-    return existing;
-  }
-
-  const publicKey = await fetchVapidKey();
-  const sub = await reg.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(publicKey),
-  });
-  pushSubscription = sub;
-  return sub;
-}
-
-async function updatePushStatusText() {
-  try {
-    const reg = await ensureServiceWorkerReady();
-    const sub = await reg.pushManager.getSubscription();
-    if (sub) {
-      pushSubscription = sub;
-      setPushStatus("Push notifications are active for this browser.", "ok");
-    } else {
-      setPushStatus("Push notifications are not enabled yet. Click below and accept the prompt to turn them on.");
-    }
-  } catch (e) {
-    setPushStatus(e.message || "Push notifications are unavailable.", "err");
-  }
-}
-
-function subscriptionPayload(sub) {
-  const json = sub?.toJSON?.();
-  if (!json) return null;
-  return {
-    endpoint: json.endpoint,
-    keys: json.keys || {},
-  };
-}
-
-function updateAlertNotes() {
-  const selection = describeCurrentSelection();
-  if (!selection) {
-    els.alertNotes.textContent = "Pick a make/model above, then save the alert.";
-    return;
-  }
-  const detail = selection.model ? `${selection.make} — ${selection.model}` : `${selection.make} (any model)`;
-  const year = (els.alertYear.value || "").trim();
-  const yearText = year ? ` for ${year}` : " (enter a year to save)";
-  els.alertNotes.textContent = `Alert will track: ${detail}${yearText}.`;
 }
 
 function clearResults(message = "") {
@@ -204,18 +89,6 @@ async function postJson(path, bodyObj) {
   });
   if (!r.ok) throw new Error(`${path} failed: ${r.status}`);
   return await r.json();
-}
-
-async function alertsApi(path, { method = "GET", body } = {}) {
-  const opts = { method, headers: { "Content-Type": "application/json" } };
-  if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(ALERTS_BASE + path, opts);
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    const msg = data?.error || `${method} ${path} failed (${r.status})`;
-    throw new Error(msg);
-  }
-  return data;
 }
 
 async function postHtml(path, bodyObj) {
@@ -509,137 +382,6 @@ async function searchAllYards() {
   applyFiltersAndRender();
 }
 
-function formatTimestamp(ts) {
-  if (!ts) return "never";
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return ts;
-  return d.toLocaleString();
-}
-
-function renderAlerts(alerts, errorMsg = "") {
-  els.alertsList.innerHTML = "";
-  if (errorMsg) {
-    const div = document.createElement("div");
-    div.className = "alert-row";
-    div.innerHTML = `<div class="alert-meta">${escapeHtml(errorMsg)}</div>`;
-    els.alertsList.appendChild(div);
-    return;
-  }
-
-  if (!alerts || !alerts.length) {
-    const div = document.createElement("div");
-    div.className = "alert-row";
-    div.innerHTML = `<div class="alert-meta">No saved alerts yet. Save one above.</div>`;
-    els.alertsList.appendChild(div);
-    return;
-  }
-
-  const frag = document.createDocumentFragment();
-  for (const a of alerts) {
-    const row = document.createElement("div");
-    row.className = "alert-row";
-
-    const left = document.createElement("div");
-    const headline = document.createElement("div");
-    headline.className = "alert-primary";
-    headline.textContent = `${a.VehicleMake}${a.VehicleModel ? " — " + a.VehicleModel : " (any model)"} (${a.VehicleYear || "year?"})`;
-
-    const meta = document.createElement("div");
-    meta.className = "alert-meta";
-    meta.textContent = `Push subscription: ${a.hasPush ? "set" : "missing"} • Created ${formatTimestamp(a.createdAt)}`;
-
-    const statusLine = document.createElement("div");
-    statusLine.className = "alert-meta";
-    const status = a.lastNotificationStatus || "No notifications sent yet.";
-    statusLine.textContent = `Last notified: ${formatTimestamp(a.lastNotifiedAt)} (${status})`;
-
-    left.appendChild(headline);
-    left.appendChild(meta);
-    left.appendChild(statusLine);
-
-    const actions = document.createElement("div");
-    actions.className = "alert-actions";
-    const statusChip = document.createElement("span");
-    statusChip.className = "chip";
-    statusChip.textContent = a.lastNotificationStatus ? "Active" : "New";
-    actions.appendChild(statusChip);
-
-    const del = document.createElement("button");
-    del.className = "secondary";
-    del.textContent = "Delete";
-    del.addEventListener("click", () => deleteAlert(a.id));
-    actions.appendChild(del);
-
-    row.appendChild(left);
-    row.appendChild(actions);
-    frag.appendChild(row);
-  }
-
-  els.alertsList.appendChild(frag);
-}
-
-async function loadAlerts() {
-  try {
-    setAlertStatus("Loading saved alerts…");
-    const data = await alertsApi("", { method: "GET" });
-    alertsCache = data.alerts || [];
-    renderAlerts(alertsCache);
-    setAlertStatus(`Loaded ${alertsCache.length} alert(s).`, "ok");
-  } catch (e) {
-    alertsCache = [];
-    renderAlerts([], e.message || String(e));
-    setAlertStatus(e.message || "Failed to load alerts.", "err");
-  }
-}
-
-async function saveAlert() {
-  const selection = describeCurrentSelection();
-  if (!selection) {
-    setAlertStatus("Pick a make/model first.", "err");
-    return;
-  }
-
-  const year = Number((els.alertYear.value || "").trim());
-  if (!Number.isFinite(year)) {
-    setAlertStatus("Enter the specific year to watch.", "err");
-    return;
-  }
-
-  setAlertStatus("Saving alert…");
-  try {
-    const sub = await ensurePushSubscription();
-    const subscription = subscriptionPayload(sub);
-
-    await alertsApi("", {
-      method: "POST",
-      body: {
-        VehicleMake: selection.make,
-        VehicleModel: selection.model,
-        VehicleYear: year,
-        subscription,
-      },
-    });
-    setAlertStatus("Alert saved.", "ok");
-    await loadAlerts();
-    await updatePushStatusText();
-  } catch (e) {
-    setAlertStatus(e.message || "Failed to save alert.", "err");
-  }
-}
-
-async function deleteAlert(id) {
-  if (!id) return;
-  setAlertStatus("Deleting alert…");
-  try {
-    await alertsApi(`/${encodeURIComponent(id)}`, { method: "DELETE" });
-    alertsCache = alertsCache.filter(a => a.id !== id);
-    renderAlerts(alertsCache);
-    setAlertStatus("Alert deleted.", "ok");
-  } catch (e) {
-    setAlertStatus(e.message || "Failed to delete alert.", "err");
-  }
-}
-
 // Event wiring
 els.make.addEventListener("change", async () => {
   const make = (els.make.value || "").trim();
@@ -649,7 +391,6 @@ els.make.addEventListener("change", async () => {
   els.yardCounts.innerHTML = "";
   await loadModelsAllYards(make);
   clearResults("Select a model (or Any), then search.");
-  updateAlertNotes();
 });
 
 els.model.addEventListener("change", () => {
@@ -657,24 +398,9 @@ els.model.addEventListener("change", () => {
   lastRows = [];
   clearResults("Ready to search.");
   els.yardCounts.innerHTML = "";
-  updateAlertNotes();
 });
-
-els.alertYear.addEventListener("input", () => updateAlertNotes());
 
 els.searchBtn.addEventListener("click", () => searchAllYards());
-
-els.saveAlertBtn.addEventListener("click", () => saveAlert());
-els.refreshAlertsBtn.addEventListener("click", () => loadAlerts());
-els.enablePushBtn.addEventListener("click", async () => {
-  setPushStatus("Requesting permission…");
-  try {
-    await ensurePushSubscription();
-    setPushStatus("Push notifications are active for this browser.", "ok");
-  } catch (e) {
-    setPushStatus(e.message || "Push permission denied.", "err");
-  }
-});
 
 els.resetBtn.addEventListener("click", async () => {
   els.minYear.value = "";
@@ -687,13 +413,9 @@ els.resetBtn.addEventListener("click", async () => {
   els.model.innerHTML = '<option value="">Select a make first</option>';
   els.model.disabled = true;
   els.searchBtn.disabled = true;
-  els.alertYear.value = "";
   clearResults("Reset. Select a make.");
   els.yardCounts.innerHTML = "";
   setStatus("Reset.");
-  updateAlertNotes();
-  setAlertStatus("");
-  updatePushStatusText();
 });
 
 els.quickFilter.addEventListener("input", () => {
@@ -714,9 +436,6 @@ els.maxYear.addEventListener("input", () => { if (lastRows.length) applyFiltersA
 (async function init() {
   try {
     await loadMakesAllYards();
-    updateAlertNotes();
-    await loadAlerts();
-    await updatePushStatusText();
   } catch (e) {
     setStatus("Failed to load makes. Check Worker URL + CORS.", "err");
     els.make.disabled = true;
@@ -724,6 +443,5 @@ els.maxYear.addEventListener("input", () => { if (lastRows.length) applyFiltersA
     els.searchBtn.disabled = true;
     clearResults("Error loading makes.");
     console.error(e);
-    setAlertStatus("Alerts unavailable.", "err");
   }
 })();

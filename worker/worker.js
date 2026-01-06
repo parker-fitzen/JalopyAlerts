@@ -1,4 +1,4 @@
-// Cloudflare Worker: CORS proxy + optional multi-yard aggregation + saved alerts
+// Cloudflare Worker: CORS proxy + optional multi-yard aggregation
 // NOTE: Be respectful: this multiplies upstream traffic. Add caching.
 
 const UPSTREAM = "https://inventory.pickapartjalopyjungle.com";
@@ -6,9 +6,6 @@ const UPSTREAM = "https://inventory.pickapartjalopyjungle.com";
 const DAILY_ALERT_CRON = "0 9 * * *";
 
 const SAVED_SEARCHES_KV_KEY = "saved-searches";
-const MAX_ALERTS_TOTAL = 500;
-const MAX_ALERTS_PER_OWNER = 25;
-const ALERT_ROUTE_PREFIX = "/alerts";
 
 const YARDS = [
   { id: "1020", name: "BOISE" },
@@ -25,47 +22,35 @@ const PASSTHRU_PATHS = new Set(["/", "/Home/GetMakes", "/Home/GetModels"]);
 const API_PATHS = new Set(["/api/searchAll", "/api/makesAll", "/api/modelsAll"]);
 
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request) {
     const url = new URL(request.url);
-    const allowedOrigin = pickAllowedOrigin(request, env);
 
     // CORS preflight
     if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: corsHeaders(allowedOrigin) });
+      return new Response(null, { status: 204, headers: corsHeaders() });
     }
-
-  if (url.pathname.startsWith(ALERT_ROUTE_PREFIX)) {
-    try {
-      if (url.pathname === `${ALERT_ROUTE_PREFIX}/notification` && request.method === "POST") {
-        return await handleNotificationPoll(request, env, allowedOrigin);
-      }
-      return await handleAlerts(request, env, allowedOrigin);
-    } catch (err) {
-      return json({ error: String(err?.message || err) }, 500, {}, allowedOrigin);
-    }
-  }
 
     // ---- Worker-handled API endpoints ----
     if (API_PATHS.has(url.pathname)) {
       try {
         if (url.pathname === "/api/searchAll") {
-          return await handleSearchAll(request, allowedOrigin);
+          return await handleSearchAll(request);
         }
         if (url.pathname === "/api/makesAll") {
-          return await handleMakesAll(request, allowedOrigin);
+          return await handleMakesAll(request);
         }
         if (url.pathname === "/api/modelsAll") {
-          return await handleModelsAll(request, allowedOrigin);
+          return await handleModelsAll(request);
         }
-        return json({ error: "Not found" }, 404, {}, allowedOrigin);
+        return json({ error: "Not found" }, 404);
       } catch (err) {
-        return json({ error: String(err?.message || err) }, 500, {}, allowedOrigin);
+        return json({ error: String(err?.message || err) }, 500);
       }
     }
 
     // ---- Passthrough proxy (locked-down) ----
     if (!PASSTHRU_PATHS.has(url.pathname)) {
-      return new Response("Forbidden", { status: 403, headers: corsHeaders(allowedOrigin) });
+      return new Response("Forbidden", { status: 403, headers: corsHeaders() });
     }
 
     const target = new URL(UPSTREAM + url.pathname);
@@ -83,7 +68,7 @@ export default {
     });
 
     const outHeaders = new Headers(upstream.headers);
-    for (const [k, v] of Object.entries(corsHeaders(allowedOrigin))) outHeaders.set(k, v);
+    for (const [k, v] of Object.entries(corsHeaders())) outHeaders.set(k, v);
 
     return new Response(upstream.body, {
       status: upstream.status,
@@ -98,14 +83,14 @@ export default {
   },
 };
 
-async function handleSearchAll(request, allowedOrigin = "*") {
-  if (request.method !== "POST") return json({ error: "POST only" }, 405, {}, allowedOrigin);
+async function handleSearchAll(request) {
+  if (request.method !== "POST") return json({ error: "POST only" }, 405);
 
   const params = await readBodyParams(request);
   const VehicleMake = (params.VehicleMake || params.make || "").toString().trim();
   const VehicleModel = (params.VehicleModel || params.model || "").toString().trim();
 
-  if (!VehicleMake) return json({ error: "VehicleMake is required" }, 400, {}, allowedOrigin);
+  if (!VehicleMake) return json({ error: "VehicleMake is required" }, 400);
 
   // Fan out (limit concurrency to be polite)
   const jobs = YARDS.map((y) => async () => {
@@ -138,13 +123,12 @@ async function handleSearchAll(request, allowedOrigin = "*") {
     {
       // light caching to reduce load; tune as needed
       "Cache-Control": "public, max-age=300",
-    },
-    allowedOrigin
+    }
   );
 }
 
-async function handleMakesAll(request, allowedOrigin = "*") {
-  if (request.method !== "POST") return json({ error: "POST only" }, 405, {}, allowedOrigin);
+async function handleMakesAll(request) {
+  if (request.method !== "POST") return json({ error: "POST only" }, 405);
 
   const jobs = YARDS.map((y) => async () => {
     const makes = await postJsonUpstream("/Home/GetMakes", { yardId: y.id });
@@ -156,20 +140,15 @@ async function handleMakesAll(request, allowedOrigin = "*") {
   const set = new Set(lists.flat());
   const merged = Array.from(set).sort((a, b) => a.localeCompare(b));
 
-  return json(
-    { count: merged.length, makes: merged },
-    200,
-    { "Cache-Control": "public, max-age=3600" },
-    allowedOrigin
-  );
+  return json({ count: merged.length, makes: merged }, 200, { "Cache-Control": "public, max-age=3600" });
 }
 
-async function handleModelsAll(request, allowedOrigin = "*") {
-  if (request.method !== "POST") return json({ error: "POST only" }, 405, {}, allowedOrigin);
+async function handleModelsAll(request) {
+  if (request.method !== "POST") return json({ error: "POST only" }, 405);
 
   const params = await readBodyParams(request);
   const makeName = (params.makeName || params.VehicleMake || params.make || "").toString().trim();
-  if (!makeName) return json({ error: "makeName is required" }, 400, {}, allowedOrigin);
+  if (!makeName) return json({ error: "makeName is required" }, 400);
 
   const jobs = YARDS.map((y) => async () => {
     const models = await postJsonUpstream("/Home/GetModels", { yardId: y.id, makeName });
@@ -181,12 +160,7 @@ async function handleModelsAll(request, allowedOrigin = "*") {
   const set = new Set(lists.flat());
   const merged = Array.from(set).sort((a, b) => a.localeCompare(b));
 
-  return json(
-    { makeName, count: merged.length, models: merged },
-    200,
-    { "Cache-Control": "public, max-age=3600" },
-    allowedOrigin
-  );
+  return json({ makeName, count: merged.length, models: merged }, 200, { "Cache-Control": "public, max-age=3600" });
 }
 
 async function fetchAndParseInventory({ yardId, yardName, VehicleMake, VehicleModel }) {
@@ -294,15 +268,15 @@ async function runPool(taskFns, limit) {
   return results;
 }
 
-function json(obj, status = 200, extraHeaders = {}, allowedOrigin = "*") {
-  const h = new Headers({ "Content-Type": "application/json", ...corsHeaders(allowedOrigin), ...extraHeaders });
+function json(obj, status = 200, extraHeaders = {}) {
+  const h = new Headers({ "Content-Type": "application/json", ...corsHeaders(), ...extraHeaders });
   return new Response(JSON.stringify(obj), { status, headers: h });
 }
 
-function corsHeaders(allowedOrigin = "*") {
+function corsHeaders() {
   return {
-    "Access-Control-Allow-Origin": allowedOrigin,
-    "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Max-Age": "86400",
   };
@@ -329,10 +303,7 @@ async function rerunSavedSearches(env) {
     };
 
     if (newVehicles.length) {
-      const delivery = await deliverNotifications(search, newVehicles, env);
       next.lastNotifiedAt = new Date().toISOString();
-      next.lastNotificationStatus = delivery.status;
-      next.lastNotificationPayload = delivery.payload;
     }
 
     refreshed.push(next);
@@ -344,7 +315,6 @@ async function rerunSavedSearches(env) {
 async function runSavedSearch(search) {
   const VehicleMake = (search?.VehicleMake || search?.make || "").toString().trim();
   const VehicleModel = (search?.VehicleModel || search?.model || "").toString().trim();
-  const VehicleYear = Number(search?.VehicleYear || search?.year);
 
   if (!VehicleMake) return [];
 
@@ -359,9 +329,7 @@ async function runSavedSearch(search) {
   });
 
   const all = await runPool(jobs, 2);
-  const flattened = all.flat();
-  if (!VehicleYear || !Number.isFinite(VehicleYear)) return flattened;
-  return flattened.filter((r) => Number(r.year) === VehicleYear);
+  return all.flat();
 }
 
 function diffNewVehicles(current, previous) {
@@ -375,303 +343,4 @@ function inventoryKey(row) {
 
 function getSearchStore(env) {
   return env?.ALERTS || env?.SAVED_SEARCHES || null;
-}
-
-async function handleAlerts(request, env, allowedOrigin = "*") {
-  const kv = getSearchStore(env);
-  if (!kv) return json({ error: "KV namespace not configured" }, 500, {}, allowedOrigin);
-
-  const ownerKey = await hashOwner(request, env);
-  const url = new URL(request.url);
-  const idFromPath = url.pathname.length > ALERT_ROUTE_PREFIX.length ? url.pathname.slice(ALERT_ROUTE_PREFIX.length + 1) : null;
-
-  if (request.method === "GET") {
-    if (url.pathname.endsWith("/public-key")) {
-      const pub = (env?.ALERT_VAPID_PUBLIC_KEY || env?.VAPID_PUBLIC_KEY || "").trim();
-      if (!pub) return json({ error: "Push not configured" }, 503, {}, allowedOrigin);
-      return json({ publicKey: pub }, 200, { "Cache-Control": "public, max-age=300" }, allowedOrigin);
-    }
-
-    const saved = await kv.get(SAVED_SEARCHES_KV_KEY, { type: "json" });
-    const searches = Array.isArray(saved) ? saved : [];
-    const mine = searches.filter((s) => s.ownerKey === ownerKey);
-    return json({ count: mine.length, alerts: mine.map(redactSearchForClient) }, 200, {}, allowedOrigin);
-  }
-
-  if (request.method === "POST") {
-    const payload = await readBodyParams(request);
-    let validated;
-    try {
-      validated = await validateAlertPayload(payload);
-    } catch (err) {
-      return json({ error: String(err?.message || err) }, 400, {}, allowedOrigin);
-    }
-
-    const saved = await kv.get(SAVED_SEARCHES_KV_KEY, { type: "json" });
-    const searches = Array.isArray(saved) ? saved : [];
-
-    if (searches.length >= MAX_ALERTS_TOTAL) {
-      return json({ error: "Alert capacity reached. Try again later." }, 429, {}, allowedOrigin);
-    }
-
-    const mine = searches.filter((s) => s.ownerKey === ownerKey);
-    if (mine.length >= MAX_ALERTS_PER_OWNER) {
-      return json({ error: "Too many saved alerts. Delete one before adding another." }, 429, {}, allowedOrigin);
-    }
-
-    const duplicate = mine.find(
-      (s) =>
-        normalizeText(s.VehicleMake) === validated.VehicleMake &&
-        normalizeText(s.VehicleModel || "") === normalizeText(validated.VehicleModel || "") &&
-        Number(s.VehicleYear) === validated.VehicleYear &&
-        normalizeText(s.pushEndpoint || "") === normalizeText(validated.pushEndpoint || "")
-    );
-    if (duplicate) {
-      return json({ error: "You already saved this search." }, 409, {}, allowedOrigin);
-    }
-
-    const id = crypto.randomUUID();
-    const base = {
-      id,
-      ownerKey,
-      createdAt: new Date().toISOString(),
-      VehicleMake: validated.VehicleMake,
-      VehicleModel: validated.VehicleModel || "",
-      VehicleYear: validated.VehicleYear,
-      pushEndpoint: validated.pushEndpoint || null,
-      pushAuth: validated.pushAuth || null,
-      pushP256dh: validated.pushP256dh || null,
-    };
-
-    try {
-      base.lastSnapshot = await runSavedSearch(base);
-    } catch (err) {
-      base.lastSnapshot = [];
-      base.lastNotificationStatus = `prefetch failed: ${String(err?.message || err)}`;
-    }
-
-    searches.push(base);
-    await kv.put(SAVED_SEARCHES_KV_KEY, JSON.stringify(searches));
-
-    return json({ ok: true, alert: redactSearchForClient(base) }, 201, {}, allowedOrigin);
-  }
-
-  if (request.method === "DELETE") {
-    const id = (idFromPath || url.searchParams.get("id") || "").trim();
-    if (!id) return json({ error: "id is required" }, 400, {}, allowedOrigin);
-
-    const saved = await kv.get(SAVED_SEARCHES_KV_KEY, { type: "json" });
-    const searches = Array.isArray(saved) ? saved : [];
-    const before = searches.length;
-    const remaining = searches.filter((s) => !(s.id === id && s.ownerKey === ownerKey));
-    if (remaining.length === before) return json({ error: "Not found" }, 404, {}, allowedOrigin);
-
-    await kv.put(SAVED_SEARCHES_KV_KEY, JSON.stringify(remaining));
-    return json({ ok: true }, 200, {}, allowedOrigin);
-  }
-
-  return json({ error: "Method not allowed" }, 405, {}, allowedOrigin);
-}
-
-async function handleNotificationPoll(request, env, allowedOrigin = "*") {
-  const kv = getSearchStore(env);
-  if (!kv) return json({ error: "KV namespace not configured" }, 500, {}, allowedOrigin);
-
-  const body = await readBodyParams(request);
-  const endpoint = normalizeText(body.endpoint || "");
-  if (!endpoint) return json({ error: "endpoint is required" }, 400, {}, allowedOrigin);
-
-  const saved = await kv.get(SAVED_SEARCHES_KV_KEY, { type: "json" });
-  const searches = Array.isArray(saved) ? saved : [];
-  const match = searches.find((s) => normalizeText(s.pushEndpoint || "") === endpoint);
-  if (!match) return json({ notification: null }, 200, {}, allowedOrigin);
-
-  return json(
-    {
-      notification: match.lastNotificationPayload || null,
-      lastNotifiedAt: match.lastNotifiedAt || null,
-      lastNotificationStatus: match.lastNotificationStatus || null,
-    },
-    200,
-    {},
-    allowedOrigin
-  );
-}
-
-function redactSearchForClient(search) {
-  const { id, VehicleMake, VehicleModel, VehicleYear, createdAt, lastNotifiedAt, lastNotificationStatus, pushEndpoint } = search || {};
-  return {
-    id,
-    VehicleMake,
-    VehicleModel,
-    VehicleYear: VehicleYear ?? null,
-    hasPush: !!pushEndpoint,
-    createdAt,
-    lastNotifiedAt: lastNotifiedAt || null,
-    lastNotificationStatus: lastNotificationStatus || null,
-  };
-}
-
-async function validateAlertPayload(payload) {
-  const VehicleMake = normalizeText(payload.VehicleMake || payload.make || "");
-  const VehicleModel = normalizeText(payload.VehicleModel || payload.model || "");
-  const VehicleYear = Number((payload.VehicleYear || payload.year || "").toString().trim());
-  const subscription = normalizeSubscription(payload.subscription || payload.pushSubscription || null);
-  const pushEndpoint = subscription?.endpoint || normalizeText(payload.pushEndpoint || "");
-  const pushAuth = subscription?.auth || normalizeText(payload.pushAuth || "");
-  const pushP256dh = subscription?.p256dh || normalizeText(payload.pushP256dh || "");
-
-  if (!VehicleMake) throw new Error("VehicleMake is required");
-  if (VehicleMake.length > 48) throw new Error("VehicleMake too long");
-  if (VehicleModel.length > 64) throw new Error("VehicleModel too long");
-  if (!Number.isFinite(VehicleYear) || VehicleYear < 1900 || VehicleYear > 2100) {
-    throw new Error("VehicleYear must be a valid year");
-  }
-
-  if (!pushEndpoint || !pushAuth || !pushP256dh) {
-    throw new Error("Push subscription (endpoint, auth, p256dh) is required");
-  }
-
-  return { VehicleMake, VehicleModel, VehicleYear, pushEndpoint, pushAuth, pushP256dh };
-}
-
-async function hashOwner(request, env) {
-  const ip = (request.headers.get("cf-connecting-ip") || "").trim();
-  const ua = (request.headers.get("user-agent") || "").trim();
-  const salt = (env?.ALERT_SIGNING_SECRET || "default-salt").trim();
-  return await hashString(`${salt}:${ip}:${ua}`);
-}
-
-async function hashString(input) {
-  const data = new TextEncoder().encode(input || "");
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  const bytes = Array.from(new Uint8Array(digest));
-  return bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function normalizeText(v) {
-  return (v || "").toString().trim();
-}
-
-function normalizeSubscription(sub) {
-  if (!sub || typeof sub !== "object") return null;
-  const endpoint = normalizeText(sub.endpoint || "");
-  const auth = normalizeText(sub.keys?.auth || sub.auth || "");
-  const p256dh = normalizeText(sub.keys?.p256dh || sub.p256dh || "");
-  if (!endpoint || !auth || !p256dh) return null;
-  return { endpoint, auth, p256dh };
-}
-
-async function deliverNotifications(search, newVehicles, env) {
-  const payload = buildNotificationPayload(search, newVehicles);
-  const vapid = getVapidConfig(env);
-
-  if (!vapid) return { status: "push unavailable (missing VAPID keys)", payload };
-
-  if (!search?.pushEndpoint) {
-    return { status: "no push subscription", payload };
-  }
-
-  try {
-    await sendWebPush({
-      endpoint: search.pushEndpoint,
-      vapid,
-    });
-    return { status: "push sent", payload };
-  } catch (err) {
-    return { status: `push failed: ${String(err?.message || err)}`, payload };
-  }
-}
-
-function pickAllowedOrigin(request, env) {
-  const configured = (env?.ALLOWED_ORIGIN || env?.ALLOWED_ORIGINS || "*").trim();
-  if (configured === "*") return "*";
-  const reqOrigin = (request?.headers?.get("origin") || "").trim();
-  const allowed = configured
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (allowed.includes(reqOrigin)) return reqOrigin;
-  return allowed[0] || "*";
-}
-
-function buildNotificationPayload(search, newVehicles) {
-  const detail = `${search.VehicleYear} ${search.VehicleMake}${search.VehicleModel ? ` ${search.VehicleModel}` : ""}`;
-  const yardNames = Array.from(new Set(newVehicles.map((r) => r.yardName))).join(", ");
-  const body = `${newVehicles.length} new arrival(s) at ${yardNames || "unknown yard"}.`;
-  return {
-    title: `Jalopy Alerts: ${detail}`,
-    body,
-    data: {
-      alertId: search.id,
-      count: newVehicles.length,
-      yards: yardNames,
-    },
-  };
-}
-
-function getVapidConfig(env) {
-  const publicKey = (env?.ALERT_VAPID_PUBLIC_KEY || env?.VAPID_PUBLIC_KEY || "").trim();
-  const privateKey = (env?.ALERT_VAPID_PRIVATE_KEY || env?.VAPID_PRIVATE_KEY || "").trim();
-  if (!publicKey || !privateKey) return null;
-  return {
-    publicKey,
-    privateKey,
-    subject: (env?.ALERT_VAPID_SUBJECT || env?.VAPID_SUBJECT || "mailto:alerts@example.com").trim(),
-  };
-}
-
-async function sendWebPush({ endpoint, vapid }) {
-  const aud = new URL(endpoint).origin;
-  const token = await createVapidJwt({ aud, vapid });
-  const headers = {
-    TTL: "43200",
-    Authorization: `vapid t=${token}, k=${vapid.publicKey}`,
-  };
-
-  // Send a minimal payload-free push; the service worker will fetch details.
-  const resp = await fetch(endpoint, { method: "POST", headers });
-  if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`push failed (${resp.status}): ${txt}`);
-  }
-
-  return "push sent";
-}
-
-async function createVapidJwt({ aud, vapid }) {
-  const now = Math.floor(Date.now() / 1000);
-  const exp = now + 12 * 60 * 60; // 12h
-  const header = { alg: "ES256", typ: "JWT" };
-  const payload = { aud, exp, sub: vapid.subject };
-
-  const unsigned = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(JSON.stringify(payload))}`;
-  const keyData = base64UrlToUint8Array(vapid.privateKey);
-
-  const key = await crypto.subtle.importKey(
-    "pkcs8",
-    keyData,
-    { name: "ECDSA", namedCurve: "P-256" },
-    false,
-    ["sign"]
-  );
-
-  const signature = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, new TextEncoder().encode(unsigned));
-  return `${unsigned}.${base64UrlEncode(signature, true)}`;
-}
-
-function base64UrlEncode(input, isBuffer = false) {
-  const raw = isBuffer ? new Uint8Array(input) : new TextEncoder().encode(input);
-  let str = btoa(String.fromCharCode(...raw));
-  str = str.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  return str;
-}
-
-function base64UrlToUint8Array(base64String) {
-  const padded = base64String.replace(/-/g, "+").replace(/_/g, "/");
-  const binary = atob(padded);
-  const len = binary.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes.buffer;
 }
