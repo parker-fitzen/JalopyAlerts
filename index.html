@@ -101,15 +101,27 @@
       </div>
 
       <div class="grid controls" style="margin-top: 12px;">
-        <div class="col-6">
-          <label for="alertEmail">Alert email</label>
-          <input id="alertEmail" type="email" placeholder="you@example.com" />
+        <div class="col-4">
+          <label for="alertYear">Alert year</label>
+          <input id="alertYear" type="number" placeholder="e.g., 2005" />
         </div>
-        <div class="col-6">
+        <div class="col-8">
           <label for="alertNotes">What will be saved?</label>
           <div id="alertNotes" class="muted" style="padding: 12px; border: 1px dashed var(--border); border-radius: 10px; background: #fffaf5;">
             Pick a make/model above, then save the alert.
           </div>
+        </div>
+        <div class="col-12">
+          <label for="alertPushEndpoint">Push endpoint (from browser subscription)</label>
+          <textarea id="alertPushEndpoint" rows="2" placeholder="https://push-service.example/..." spellcheck="false"></textarea>
+        </div>
+        <div class="col-6">
+          <label for="alertPushAuth">Push auth</label>
+          <input id="alertPushAuth" type="text" placeholder="Base64 auth" spellcheck="false" />
+        </div>
+        <div class="col-6">
+          <label for="alertPushP256dh">Push p256dh</label>
+          <input id="alertPushP256dh" type="text" placeholder="Base64 p256dh" spellcheck="false" />
         </div>
         <div class="col-12 row">
           <button id="saveAlertBtn">Save alert for this search</button>

@@ -340,6 +340,7 @@ async function rerunSavedSearches(env) {
 async function runSavedSearch(search) {
   const VehicleMake = (search?.VehicleMake || search?.make || "").toString().trim();
   const VehicleModel = (search?.VehicleModel || search?.model || "").toString().trim();
+  const VehicleYear = Number(search?.VehicleYear || search?.year);
 
   if (!VehicleMake) return [];
 
@@ -354,7 +355,9 @@ async function runSavedSearch(search) {
   });
 
   const all = await runPool(jobs, 2);
-  return all.flat();
+  const flattened = all.flat();
+  if (!VehicleYear || !Number.isFinite(VehicleYear)) return flattened;
+  return flattened.filter((r) => Number(r.year) === VehicleYear);
 }
 
 function diffNewVehicles(current, previous) {
@@ -410,7 +413,8 @@ async function handleAlerts(request, env, allowedOrigin = "*") {
       (s) =>
         normalizeText(s.VehicleMake) === validated.VehicleMake &&
         normalizeText(s.VehicleModel || "") === normalizeText(validated.VehicleModel || "") &&
-        (s.email || "") === (validated.email || "")
+        Number(s.VehicleYear) === validated.VehicleYear &&
+        normalizeText(s.pushEndpoint || "") === normalizeText(validated.pushEndpoint || "")
     );
     if (duplicate) {
       return json({ error: "You already saved this search." }, 409, {}, allowedOrigin);
@@ -423,7 +427,7 @@ async function handleAlerts(request, env, allowedOrigin = "*") {
       createdAt: new Date().toISOString(),
       VehicleMake: validated.VehicleMake,
       VehicleModel: validated.VehicleModel || "",
-      email: validated.email,
+      VehicleYear: validated.VehicleYear,
       pushEndpoint: validated.pushEndpoint || null,
       pushAuth: validated.pushAuth || null,
       pushP256dh: validated.pushP256dh || null,
@@ -460,14 +464,23 @@ async function handleAlerts(request, env, allowedOrigin = "*") {
 }
 
 function redactSearchForClient(search) {
-  const { id, VehicleMake, VehicleModel, createdAt, lastNotifiedAt, lastNotificationStatus, email } = search || {};
-  return { id, VehicleMake, VehicleModel, createdAt, lastNotifiedAt: lastNotifiedAt || null, lastNotificationStatus: lastNotificationStatus || null, email: email || null };
+  const { id, VehicleMake, VehicleModel, VehicleYear, createdAt, lastNotifiedAt, lastNotificationStatus, pushEndpoint } = search || {};
+  return {
+    id,
+    VehicleMake,
+    VehicleModel,
+    VehicleYear: VehicleYear ?? null,
+    hasPush: !!pushEndpoint,
+    createdAt,
+    lastNotifiedAt: lastNotifiedAt || null,
+    lastNotificationStatus: lastNotificationStatus || null,
+  };
 }
 
 async function validateAlertPayload(payload) {
   const VehicleMake = normalizeText(payload.VehicleMake || payload.make || "");
   const VehicleModel = normalizeText(payload.VehicleModel || payload.model || "");
-  const email = normalizeText(payload.email || payload.contact || "");
+  const VehicleYear = Number((payload.VehicleYear || payload.year || "").toString().trim());
   const pushEndpoint = normalizeText(payload.pushEndpoint || "");
   const pushAuth = normalizeText(payload.pushAuth || "");
   const pushP256dh = normalizeText(payload.pushP256dh || "");
@@ -475,16 +488,15 @@ async function validateAlertPayload(payload) {
   if (!VehicleMake) throw new Error("VehicleMake is required");
   if (VehicleMake.length > 48) throw new Error("VehicleMake too long");
   if (VehicleModel.length > 64) throw new Error("VehicleModel too long");
-
-  const hasEmail = !!email;
-  const hasPush = !!pushEndpoint;
-  if (!hasEmail && !hasPush) throw new Error("Provide an email or push subscription.");
-
-  if (hasEmail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-    throw new Error("Email looks invalid");
+  if (!Number.isFinite(VehicleYear) || VehicleYear < 1900 || VehicleYear > 2100) {
+    throw new Error("VehicleYear must be a valid year");
   }
 
-  return { VehicleMake, VehicleModel, email, pushEndpoint, pushAuth, pushP256dh };
+  if (!pushEndpoint || !pushAuth || !pushP256dh) {
+    throw new Error("Push subscription (endpoint, auth, p256dh) is required");
+  }
+
+  return { VehicleMake, VehicleModel, VehicleYear, pushEndpoint, pushAuth, pushP256dh };
 }
 
 async function hashOwner(request, env) {
@@ -505,33 +517,9 @@ function normalizeText(v) {
   return (v || "").toString().trim();
 }
 
-function escapeHtml(s) {
-  return (s || "")
-    .toString()
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
 async function deliverNotifications(search, newVehicles, env) {
-  const deliveries = [];
-
-  if (search?.email && env?.ALERT_EMAIL_FROM) {
-    deliveries.push(
-      sendEmailNotification({
-        to: search.email,
-        from: env.ALERT_EMAIL_FROM,
-        apiKey: env.ALERT_EMAIL_API_KEY,
-        search,
-        newVehicles,
-      })
-    );
-  }
-
   if (search?.pushEndpoint && env?.ALERT_PUSH_ENDPOINT && env?.ALERT_PUSH_API_KEY) {
-    deliveries.push(
+    const deliveries = [
       sendPushNotification({
         endpoint: search.pushEndpoint,
         auth: search.pushAuth,
@@ -540,62 +528,23 @@ async function deliverNotifications(search, newVehicles, env) {
         gateway: env.ALERT_PUSH_ENDPOINT,
         search,
         newVehicles,
-      })
-    );
+      }),
+    ];
+
+    const results = await Promise.allSettled(deliveries);
+    return results
+      .map((r) => (r.status === "fulfilled" ? r.value : `error: ${String(r.reason?.message || r.reason)}`))
+      .join("; ");
   }
 
-  if (!deliveries.length) return "no channels configured";
-
-  const results = await Promise.allSettled(deliveries);
-  return results
-    .map((r) => (r.status === "fulfilled" ? r.value : `error: ${String(r.reason?.message || r.reason)}`))
-    .join("; ");
-}
-
-async function sendEmailNotification({ to, from, apiKey, search, newVehicles }) {
-  const subject = `New vehicles for ${search.VehicleMake}${search.VehicleModel ? " " + search.VehicleModel : ""}`;
-  const intro = `We found ${newVehicles.length} new vehicle(s) matching your saved search.`;
-  const lines = newVehicles
-    .slice(0, 10)
-    .map((v) => `- ${v.yardName || v.yardId || "Yard"}: ${v.year || ""} ${v.make || ""} ${v.model || ""} (Row ${v.row || "?"})`);
-  const body = `${intro}\n\n${lines.join("\n") || "Details unavailable."}\n\nYou received this because you saved an alert on JalopyAlerts.`;
-
-  const payload = {
-    personalizations: [
-      {
-        to: [{ email: to }],
-      },
-    ],
-    from: { email: from },
-    subject,
-    content: [
-      { type: "text/plain", value: body },
-      { type: "text/html", value: `<p>${escapeHtml(intro)}</p><ul>${lines.map((l) => `<li>${escapeHtml(l)}</li>`).join("")}</ul>` },
-    ],
-  };
-
-  const headers = { "Content-Type": "application/json" };
-  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-
-  const resp = await fetch("https://api.mailchannels.net/tx/v1/send", {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
-  });
-
-  if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`mail send failed (${resp.status}): ${txt}`);
-  }
-
-  return "email sent";
+  return "no push subscription";
 }
 
 async function sendPushNotification({ endpoint, auth, p256dh, apiKey, gateway, search, newVehicles }) {
   const payload = {
     endpoint,
     keys: { auth, p256dh },
-    search: { make: search.VehicleMake, model: search.VehicleModel || null },
+    search: { make: search.VehicleMake, model: search.VehicleModel || null, year: search.VehicleYear },
     count: newVehicles.length,
     sample: newVehicles.slice(0, 5),
   };

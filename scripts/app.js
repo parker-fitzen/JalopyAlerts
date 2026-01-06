@@ -19,7 +19,10 @@ const els = {
   searchBtn: document.getElementById("searchBtn"),
   resetBtn: document.getElementById("resetBtn"),
   status: document.getElementById("status"),
-  alertEmail: document.getElementById("alertEmail"),
+  alertYear: document.getElementById("alertYear"),
+  alertPushEndpoint: document.getElementById("alertPushEndpoint"),
+  alertPushAuth: document.getElementById("alertPushAuth"),
+  alertPushP256dh: document.getElementById("alertPushP256dh"),
   alertStatus: document.getElementById("alertStatus"),
   alertNotes: document.getElementById("alertNotes"),
   saveAlertBtn: document.getElementById("saveAlertBtn"),
@@ -86,7 +89,9 @@ function updateAlertNotes() {
     return;
   }
   const detail = selection.model ? `${selection.make} — ${selection.model}` : `${selection.make} (any model)`;
-  els.alertNotes.textContent = `Alert will track: ${detail}.`;
+  const year = (els.alertYear.value || "").trim();
+  const yearText = year ? ` for ${year}` : " (enter a year to save)";
+  els.alertNotes.textContent = `Alert will track: ${detail}${yearText}.`;
 }
 
 function clearResults(message = "") {
@@ -457,11 +462,11 @@ function renderAlerts(alerts, errorMsg = "") {
     const left = document.createElement("div");
     const headline = document.createElement("div");
     headline.className = "alert-primary";
-    headline.textContent = `${a.VehicleMake}${a.VehicleModel ? " — " + a.VehicleModel : " (any model)"}`;
+    headline.textContent = `${a.VehicleMake}${a.VehicleModel ? " — " + a.VehicleModel : " (any model)"} (${a.VehicleYear || "year?"})`;
 
     const meta = document.createElement("div");
     meta.className = "alert-meta";
-    meta.textContent = `Email: ${a.email || "n/a"} • Created ${formatTimestamp(a.createdAt)}`;
+    meta.textContent = `Push subscription: ${a.hasPush ? "set" : "missing"} • Created ${formatTimestamp(a.createdAt)}`;
 
     const statusLine = document.createElement("div");
     statusLine.className = "alert-meta";
@@ -514,9 +519,18 @@ async function saveAlert() {
     return;
   }
 
-  const email = (els.alertEmail.value || "").trim();
-  if (!email) {
-    setAlertStatus("Enter an email for notifications.", "err");
+  const year = Number((els.alertYear.value || "").trim());
+  if (!Number.isFinite(year)) {
+    setAlertStatus("Enter the specific year to watch.", "err");
+    return;
+  }
+
+  const pushEndpoint = (els.alertPushEndpoint.value || "").trim();
+  const pushAuth = (els.alertPushAuth.value || "").trim();
+  const pushP256dh = (els.alertPushP256dh.value || "").trim();
+
+  if (!pushEndpoint || !pushAuth || !pushP256dh) {
+    setAlertStatus("Provide push endpoint, auth, and p256dh from your browser subscription.", "err");
     return;
   }
 
@@ -524,7 +538,14 @@ async function saveAlert() {
   try {
     await alertsApi("", {
       method: "POST",
-      body: { VehicleMake: selection.make, VehicleModel: selection.model, email },
+      body: {
+        VehicleMake: selection.make,
+        VehicleModel: selection.model,
+        VehicleYear: year,
+        pushEndpoint,
+        pushAuth,
+        pushP256dh,
+      },
     });
     setAlertStatus("Alert saved.", "ok");
     await loadAlerts();
@@ -566,6 +587,8 @@ els.model.addEventListener("change", () => {
   updateAlertNotes();
 });
 
+els.alertYear.addEventListener("input", () => updateAlertNotes());
+
 els.searchBtn.addEventListener("click", () => searchAllYards());
 
 els.saveAlertBtn.addEventListener("click", () => saveAlert());
@@ -582,6 +605,10 @@ els.resetBtn.addEventListener("click", async () => {
   els.model.innerHTML = '<option value="">Select a make first</option>';
   els.model.disabled = true;
   els.searchBtn.disabled = true;
+  els.alertYear.value = "";
+  els.alertPushEndpoint.value = "";
+  els.alertPushAuth.value = "";
+  els.alertPushP256dh.value = "";
   clearResults("Reset. Select a make.");
   els.yardCounts.innerHTML = "";
   setStatus("Reset.");
