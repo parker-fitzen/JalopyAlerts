@@ -22,6 +22,8 @@ header {
   padding: 20px 16px;
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
   color: #fff;
+  align-items: center;
+  align-text: center;
 }
 
 header h1 {
