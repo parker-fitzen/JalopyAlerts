@@ -19,7 +19,7 @@ body {
 }
 
 header {
-  padding: 20px 16px;
+  padding: 8px 32px;
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
   color: #fff;
   justify-content: center;
