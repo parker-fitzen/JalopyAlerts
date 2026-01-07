@@ -1,7 +1,8 @@
 // Cloudflare Worker: CORS proxy + optional multi-yard aggregation + saved alerts
 // NOTE: Be respectful: this multiplies upstream traffic. Add caching.
 
-const UPSTREAM = "https://inventory.pickapartjalopyjungle.com";
+const JALOPY_UPSTREAM = "https://inventory.pickapartjalopyjungle.com";
+const TRUSTY_UPSTREAM = "https://inventory.trustypickapart.com";
 // Daily alert sweep at 09:00 UTC (2:00 a.m. MST) to avoid future schedule drift.
 const DAILY_ALERT_CRON = "0 9 * * *";
 
@@ -12,11 +13,12 @@ const MAX_ALERTS_PER_OWNER = 25;
 const ALERT_ROUTE_PREFIX = "/alerts";
 
 const YARDS = [
-  { id: "1020", name: "BOISE" },
-  { id: "1021", name: "CALDWELL" },
-  { id: "1119", name: "GARDEN CITY" },
-  { id: "1022", name: "NAMPA" },
-  { id: "1099", name: "TWIN FALLS" },
+  { id: "1020", name: "BOISE", upstream: JALOPY_UPSTREAM, kind: "jalopy" },
+  { id: "1021", name: "CALDWELL", upstream: JALOPY_UPSTREAM, kind: "jalopy" },
+  { id: "1119", name: "GARDEN CITY", upstream: JALOPY_UPSTREAM, kind: "jalopy" },
+  { id: "1022", name: "NAMPA", upstream: JALOPY_UPSTREAM, kind: "jalopy" },
+  { id: "1099", name: "TWIN FALLS", upstream: JALOPY_UPSTREAM, kind: "jalopy" },
+  { id: "trusty", name: "TRUSTY'S", upstream: TRUSTY_UPSTREAM, kind: "trusty" },
 ];
 
 // Only these are forwarded upstream as-is:
@@ -71,7 +73,7 @@ export default {
       return new Response("Forbidden", { status: 403, headers: corsHeaders(allowedOrigin) });
     }
 
-    const target = new URL(UPSTREAM + url.pathname);
+    const target = new URL(JALOPY_UPSTREAM + url.pathname);
     target.search = url.search;
 
     const headers = new Headers(request.headers);
@@ -115,6 +117,8 @@ async function handleSearchAll(request, allowedOrigin = "*") {
     const rows = await fetchAndParseInventory({
       yardId: y.id,
       yardName: y.name,
+      upstream: y.upstream,
+      kind: y.kind,
       VehicleMake,
       VehicleModel,
     });
@@ -133,7 +137,7 @@ async function handleSearchAll(request, allowedOrigin = "*") {
   return json(
     {
       query: { VehicleMake, VehicleModel: VehicleModel || null },
-      yards: YARDS,
+      yards: YARDS.map(({ id, name }) => ({ id, name })),
       count: results.length,
       results,
     },
@@ -150,7 +154,10 @@ async function handleMakesAll(request, allowedOrigin = "*") {
   if (request.method !== "POST") return json({ error: "POST only" }, 405, {}, allowedOrigin);
 
   const jobs = YARDS.map((y) => async () => {
-    const makes = await postJsonUpstream("/Home/GetMakes", { yardId: y.id });
+    if (y.kind === "trusty") {
+      return await fetchTrustyMakes(y.upstream);
+    }
+    const makes = await postJsonUpstream(y.upstream, "/Home/GetMakes", { yardId: y.id });
     // upstream returns [{ makeName: "TOYOTA" }, ...]
     return (Array.isArray(makes) ? makes : []).map((m) => (m?.makeName || "").toString()).filter(Boolean);
   });
@@ -175,7 +182,11 @@ async function handleModelsAll(request, allowedOrigin = "*") {
   if (!makeName) return json({ error: "makeName is required" }, 400, {}, allowedOrigin);
 
   const jobs = YARDS.map((y) => async () => {
-    const models = await postJsonUpstream("/Home/GetModels", { yardId: y.id, makeName });
+    if (y.kind === "trusty") {
+      const models = await postJsonUpstream(y.upstream, "/Home/GetModels", { makeName, showInventory: true });
+      return (Array.isArray(models) ? models : []).map((m) => (m?.model || "").toString()).filter(Boolean);
+    }
+    const models = await postJsonUpstream(y.upstream, "/Home/GetModels", { yardId: y.id, makeName });
     // upstream returns [{ model: "PRIUS" }, ...]
     return (Array.isArray(models) ? models : []).map((m) => (m?.model || "").toString()).filter(Boolean);
   });
@@ -192,12 +203,12 @@ async function handleModelsAll(request, allowedOrigin = "*") {
   );
 }
 
-async function fetchAndParseInventory({ yardId, yardName, VehicleMake, VehicleModel }) {
+async function fetchAndParseInventory({ yardId, yardName, upstream, kind, VehicleMake, VehicleModel }) {
   // Cache key (POST-safe) using a synthetic GET request
   const cacheKey = new Request(
-    `https://cache.local/inv?yardId=${encodeURIComponent(yardId)}&make=${encodeURIComponent(
-      VehicleMake
-    )}&model=${encodeURIComponent(VehicleModel || "")}`
+    `https://cache.local/inv?yardId=${encodeURIComponent(yardId)}&source=${encodeURIComponent(
+      kind || ""
+    )}&make=${encodeURIComponent(VehicleMake)}&model=${encodeURIComponent(VehicleModel || "")}`
   );
   const cache = caches.default;
 
@@ -207,11 +218,11 @@ async function fetchAndParseInventory({ yardId, yardName, VehicleMake, VehicleMo
   }
 
   const form = new FormData();
-  form.set("YardId", yardId);
+  if (kind !== "trusty") form.set("YardId", yardId);
   form.set("VehicleMake", VehicleMake);
   if (VehicleModel) form.set("VehicleModel", VehicleModel);
 
-  const upstream = await fetch(UPSTREAM + "/", {
+  const upstreamRes = await fetch(upstream + "/", {
     method: "POST",
     body: form,
     headers: {
@@ -220,7 +231,7 @@ async function fetchAndParseInventory({ yardId, yardName, VehicleMake, VehicleMo
     },
   });
 
-  const html = await upstream.text();
+  const html = await upstreamRes.text();
   const rows = parseInventoryHtml(html).map((r) => ({
     yardId,
     yardName,
@@ -250,12 +261,50 @@ function parseInventoryHtml(html) {
   return out;
 }
 
-async function postJsonUpstream(path, obj) {
+async function fetchTrustyMakes(upstreamBase) {
+  const cacheKey = new Request(`https://cache.local/trusty-makes?upstream=${encodeURIComponent(upstreamBase)}`);
+  const cache = caches.default;
+  const cached = await cache.match(cacheKey);
+  if (cached) {
+    return await cached.json();
+  }
+
+  const r = await fetch(upstreamBase + "/", {
+    method: "GET",
+    headers: {
+      Accept: "text/html,application/xhtml+xml",
+    },
+  });
+  const html = await r.text();
+  const makes = parseTrustyMakes(html);
+  const resp = new Response(JSON.stringify(makes), {
+    status: 200,
+    headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=3600" },
+  });
+  await cache.put(cacheKey, resp.clone());
+  return makes;
+}
+
+function parseTrustyMakes(html) {
+  const selectMatch = html.match(/<select[^>]*id=["']car-make["'][^>]*>([\s\S]*?)<\/select>/i);
+  if (!selectMatch) return [];
+  const optionsHtml = selectMatch[1];
+  const makes = [];
+  const re = /<option[^>]*value=["']?([^"'>]*)["']?[^>]*>/gi;
+  for (const match of optionsHtml.matchAll(re)) {
+    const value = (match[1] || "").trim();
+    if (!value) continue;
+    makes.push(value);
+  }
+  return makes;
+}
+
+async function postJsonUpstream(upstreamBase, path, obj) {
   // jQuery on the site posts x-www-form-urlencoded (default $.ajax behavior).
   const body = new URLSearchParams();
   for (const [k, v] of Object.entries(obj)) body.set(k, String(v));
 
-  const r = await fetch(UPSTREAM + path, {
+  const r = await fetch(upstreamBase + path, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
     body,
@@ -355,6 +404,8 @@ async function runSavedSearch(search) {
     const rows = await fetchAndParseInventory({
       yardId: y.id,
       yardName: y.name,
+      upstream: y.upstream,
+      kind: y.kind,
       VehicleMake,
       VehicleModel,
     });

@@ -9,6 +9,7 @@ const YARDS = [
   { id: "1119", name: "GARDEN CITY" },
   { id: "1022", name: "NAMPA" },
   { id: "1099", name: "TWIN FALLS" },
+  { id: "trusty", name: "TRUSTY'S" },
 ];
 
 const els = {
@@ -44,29 +45,6 @@ let alertsCache = [];
 let pushSubscription = null;
 let vapidPublicKey = null;
 let swReadyPromise = null;
-
-// Simple polite concurrency limiter
-async function runPool(tasks, limit = 2, delayMs = 120) {
-  const results = new Array(tasks.length);
-  let idx = 0;
-
-  async function worker() {
-    while (true) {
-      const i = idx++;
-      if (i >= tasks.length) return;
-      try {
-        results[i] = await tasks[i]();
-      } catch (e) {
-        results[i] = { ok: false, error: e };
-      }
-      if (delayMs) await new Promise(r => setTimeout(r, delayMs));
-    }
-  }
-
-  const workers = Array.from({ length: Math.max(1, Math.min(limit, tasks.length)) }, () => worker());
-  await Promise.all(workers);
-  return results;
-}
 
 function setStatus(msg, kind = "") {
   els.status.className = "status" + (kind ? " " + kind : "");
@@ -220,34 +198,8 @@ async function alertsApi(path, { method = "GET", body } = {}) {
   return data;
 }
 
-async function postHtml(path, bodyObj) {
-  const r = await fetch(BASE + path, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "Accept": "text/html" },
-    body: formBody(bodyObj),
-  });
-  if (!r.ok) throw new Error(`${path} failed: ${r.status}`);
-  return await r.text();
-}
-
-function parseInventoryHtml(html) {
-  // DOM parsing is more robust than regex.
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  const table = doc.querySelector("table.table");
-  if (!table) return [];
-  const trs = Array.from(table.querySelectorAll("tr"));
-  const rows = [];
-  for (const tr of trs) {
-    const tds = tr.querySelectorAll("td");
-    if (!tds || tds.length < 4) continue;
-    const year = Number((tds[0].textContent || "").trim());
-    const make = (tds[1].textContent || "").trim();
-    const model = (tds[2].textContent || "").trim();
-    const row = (tds[3].textContent || "").trim();
-    if (!year || !make || !model) continue;
-    rows.push({ year, make, model, row });
-  }
-  return rows;
+async function postApi(path, bodyObj) {
+  return await postJson(`/api${path}`, bodyObj);
 }
 
 function normalizeYear(v) {
@@ -360,32 +312,22 @@ function escapeHtml(s) {
 }
 
 async function loadMakesAllYards() {
-  setStatus("Loading makes across yards…");
+  setStatus("Loading makes across sources…");
   els.make.disabled = true;
   els.model.disabled = true;
   els.searchBtn.disabled = true;
 
-  const tasks = YARDS.map(y => async () => {
-    const data = await postJson("/Home/GetMakes", { yardId: y.id });
-    const makes = Array.isArray(data) ? data.map(x => (x && x.makeName ? String(x.makeName).trim() : "")).filter(Boolean) : [];
-    return { ok: true, yard: y, makes };
-  });
-
-  const res = await runPool(tasks, 2, 120);
-  const set = new Set();
   let okCount = 0;
   let failCount = 0;
-
-  for (const r of res) {
-    if (r && r.ok) {
-      okCount++;
-      for (const m of r.makes) set.add(m);
-    } else {
-      failCount++;
-    }
+  try {
+    const data = await postApi("/makesAll", {});
+    const makes = Array.isArray(data?.makes) ? data.makes.map(m => String(m).trim()).filter(Boolean) : [];
+    makesCache = makes;
+    okCount = 1;
+  } catch (e) {
+    makesCache = [];
+    failCount = 1;
   }
-
-  makesCache = Array.from(set).sort((a, b) => a.localeCompare(b));
 
   // Populate Make dropdown
   els.make.innerHTML = "";
@@ -405,8 +347,8 @@ async function loadMakesAllYards() {
   els.model.disabled = true;
   els.searchBtn.disabled = true;
 
-  if (failCount) setStatus(`Makes loaded (some yards failed: ${failCount}).`, "");
-  else setStatus(`Makes loaded from ${okCount} yard(s).`, "ok");
+  if (failCount) setStatus(`Makes loaded (some sources failed: ${failCount}).`, "");
+  else setStatus(`Makes loaded from ${okCount} source(s).`, "ok");
 
   clearResults("Select a make/model, then search.");
   els.yardCounts.innerHTML = "";
@@ -430,29 +372,20 @@ async function loadModelsAllYards(make) {
   els.searchBtn.disabled = true;
   els.model.innerHTML = '<option value="">Loading…</option>';
 
-  const tasks = YARDS.map(y => async () => {
-    const data = await postJson("/Home/GetModels", { yardId: y.id, makeName: make });
-    const models = Array.isArray(data) ? data.map(x => (x && x.model ? String(x.model).trim() : "")).filter(Boolean) : [];
-    return { ok: true, yard: y, models };
-  });
-
-  const res = await runPool(tasks, 2, 120);
-  const set = new Set();
   let failCount = 0;
-
-  for (const r of res) {
-    if (r && r.ok) {
-      for (const m of r.models) set.add(m);
-    } else {
-      failCount++;
-    }
+  let models = [];
+  try {
+    const data = await postApi("/modelsAll", { makeName: make });
+    models = Array.isArray(data?.models) ? data.models.map(m => String(m).trim()).filter(Boolean) : [];
+  } catch (e) {
+    failCount = 1;
   }
 
-  const models = Array.from(set).sort((a, b) => a.localeCompare(b));
+  models.sort((a, b) => a.localeCompare(b));
   modelsCache.set(make, models);
   populateModels(models);
 
-  if (failCount) setStatus(`Models loaded (some yards failed: ${failCount}).`, "");
+  if (failCount) setStatus(`Models loaded (some sources failed: ${failCount}).`, "");
   else setStatus("Models loaded.", "ok");
 }
 
@@ -493,40 +426,29 @@ async function searchAllYards() {
   clearResults("Searching…");
   els.yardCounts.innerHTML = "";
 
-  const tasks = YARDS.map(y => async () => {
-    const html = await postHtml("/", {
-      YardId: y.id,
+  let allRows = [];
+  let failures = [];
+  try {
+    const data = await postApi("/searchAll", {
       VehicleMake: make,
-      VehicleModel: model || "", // blank allowed
+      VehicleModel: model || "",
     });
-    const rows = parseInventoryHtml(html).map(r => ({
-      ...r,
-      yardId: y.id,
-      yardName: y.name,
-    }));
-    return { ok: true, yard: y, rows };
-  });
-
-  const res = await runPool(tasks, 2, 150);
-  const allRows = [];
-  const failures = [];
-
-  for (const r of res) {
-    if (r && r.ok) allRows.push(...r.rows);
-    else failures.push(r);
+    allRows = Array.isArray(data?.results) ? data.results : [];
+  } catch (e) {
+    failures = [e];
   }
 
   lastRows = allRows;
   els.searchBtn.disabled = false;
 
   if (!allRows.length) {
-    setStatus(failures.length ? `No results (and ${failures.length} yard(s) failed).` : "No results.", failures.length ? "" : "");
+    setStatus(failures.length ? `No results (and ${failures.length} source(s) failed).` : "No results.", failures.length ? "" : "");
     clearResults("No matches returned from any yard.");
     renderYardCounts([]);
     return;
   }
 
-  if (failures.length) setStatus(`Fetched ${allRows.length} raw rows. (${failures.length} yard(s) failed.)`, "");
+  if (failures.length) setStatus(`Fetched ${allRows.length} raw rows. (${failures.length} source(s) failed.)`, "");
   else setStatus(`Fetched ${allRows.length} raw rows.`, "ok");
 
   // Apply year range + quick filter + sort and render.
