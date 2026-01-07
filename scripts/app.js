@@ -9,6 +9,7 @@ const YARDS = [
   { id: "1119", name: "GARDEN CITY" },
   { id: "1022", name: "NAMPA" },
   { id: "1099", name: "TWIN FALLS" },
+  { id: "TRUSTY", name: "TRUSTY'S" },
 ];
 
 const els = {
@@ -365,27 +366,16 @@ async function loadMakesAllYards() {
   els.model.disabled = true;
   els.searchBtn.disabled = true;
 
-  const tasks = YARDS.map(y => async () => {
-    const data = await postJson("/Home/GetMakes", { yardId: y.id });
-    const makes = Array.isArray(data) ? data.map(x => (x && x.makeName ? String(x.makeName).trim() : "")).filter(Boolean) : [];
-    return { ok: true, yard: y, makes };
-  });
-
-  const res = await runPool(tasks, 2, 120);
-  const set = new Set();
-  let okCount = 0;
-  let failCount = 0;
-
-  for (const r of res) {
-    if (r && r.ok) {
-      okCount++;
-      for (const m of r.makes) set.add(m);
-    } else {
-      failCount++;
-    }
+  let data;
+  try {
+    data = await postJson("/api/makesAll", {});
+  } catch (e) {
+    setStatus(e.message || "Failed to load makes.", "err");
+    return;
   }
 
-  makesCache = Array.from(set).sort((a, b) => a.localeCompare(b));
+  const makes = Array.isArray(data?.makes) ? data.makes : [];
+  makesCache = makes.slice().sort((a, b) => a.localeCompare(b));
 
   // Populate Make dropdown
   els.make.innerHTML = "";
@@ -405,8 +395,7 @@ async function loadMakesAllYards() {
   els.model.disabled = true;
   els.searchBtn.disabled = true;
 
-  if (failCount) setStatus(`Makes loaded (some yards failed: ${failCount}).`, "");
-  else setStatus(`Makes loaded from ${okCount} yard(s).`, "ok");
+  setStatus(`Makes loaded from ${YARDS.length} yard(s).`, "ok");
 
   clearResults("Select a make/model, then search.");
   els.yardCounts.innerHTML = "";
@@ -430,30 +419,19 @@ async function loadModelsAllYards(make) {
   els.searchBtn.disabled = true;
   els.model.innerHTML = '<option value="">Loading…</option>';
 
-  const tasks = YARDS.map(y => async () => {
-    const data = await postJson("/Home/GetModels", { yardId: y.id, makeName: make });
-    const models = Array.isArray(data) ? data.map(x => (x && x.model ? String(x.model).trim() : "")).filter(Boolean) : [];
-    return { ok: true, yard: y, models };
-  });
-
-  const res = await runPool(tasks, 2, 120);
-  const set = new Set();
-  let failCount = 0;
-
-  for (const r of res) {
-    if (r && r.ok) {
-      for (const m of r.models) set.add(m);
-    } else {
-      failCount++;
-    }
+  let data;
+  try {
+    data = await postJson("/api/modelsAll", { makeName: make });
+  } catch (e) {
+    setStatus(e.message || "Failed to load models.", "err");
+    return;
   }
 
-  const models = Array.from(set).sort((a, b) => a.localeCompare(b));
+  const models = Array.isArray(data?.models) ? data.models.slice().sort((a, b) => a.localeCompare(b)) : [];
   modelsCache.set(make, models);
   populateModels(models);
 
-  if (failCount) setStatus(`Models loaded (some yards failed: ${failCount}).`, "");
-  else setStatus("Models loaded.", "ok");
+  setStatus("Models loaded.", "ok");
 }
 
 function populateModels(models) {
@@ -493,41 +471,28 @@ async function searchAllYards() {
   clearResults("Searching…");
   els.yardCounts.innerHTML = "";
 
-  const tasks = YARDS.map(y => async () => {
-    const html = await postHtml("/", {
-      YardId: y.id,
-      VehicleMake: make,
-      VehicleModel: model || "", // blank allowed
-    });
-    const rows = parseInventoryHtml(html).map(r => ({
-      ...r,
-      yardId: y.id,
-      yardName: y.name,
-    }));
-    return { ok: true, yard: y, rows };
-  });
-
-  const res = await runPool(tasks, 2, 150);
-  const allRows = [];
-  const failures = [];
-
-  for (const r of res) {
-    if (r && r.ok) allRows.push(...r.rows);
-    else failures.push(r);
+  let data;
+  try {
+    data = await postJson("/api/searchAll", { VehicleMake: make, VehicleModel: model || "" });
+  } catch (e) {
+    setStatus(e.message || "Search failed.", "err");
+    clearResults("Search failed.");
+    els.searchBtn.disabled = false;
+    return;
   }
 
+  const allRows = Array.isArray(data?.results) ? data.results : [];
   lastRows = allRows;
   els.searchBtn.disabled = false;
 
   if (!allRows.length) {
-    setStatus(failures.length ? `No results (and ${failures.length} yard(s) failed).` : "No results.", failures.length ? "" : "");
+    setStatus("No results.", "");
     clearResults("No matches returned from any yard.");
     renderYardCounts([]);
     return;
   }
 
-  if (failures.length) setStatus(`Fetched ${allRows.length} raw rows. (${failures.length} yard(s) failed.)`, "");
-  else setStatus(`Fetched ${allRows.length} raw rows.`, "ok");
+  setStatus(`Fetched ${allRows.length} raw rows.`, "ok");
 
   // Apply year range + quick filter + sort and render.
   applyFiltersAndRender();
