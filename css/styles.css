@@ -25,6 +25,13 @@ header {
   justify-content: center;
 }
 
+header .wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
 header h1 {
   margin: 0;
   font-size: 20px;
