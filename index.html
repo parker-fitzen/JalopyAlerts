@@ -94,24 +94,23 @@
     <div class="card" id="alertsCard">
       <div class="row" style="justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
         <div>
-          <h2 style="margin: 0;">Saved alerts</h2>
-          <p class="muted" style="margin: 4px 0 0;">Save this search and get notified when new vehicles arrive.</p>
+          <h2 style="margin: 0;">Alerts</h2>
         </div>
       </div>
 
       <div class="grid controls" style="margin-top: 12px;">
+        <div class="col-12 row">
+          <button id="saveAlertBtn">Alert for Current Search</button>
+          <span id="alertStatus" class="status"></span>
+        </div>
         <div class="col-12">
           <label for="alertNotes">What will be saved?</label>
           <div id="alertNotes" class="muted" style="padding: 12px; border: 1px dashed var(--border); border-radius: 10px; background: #fffaf5;">
             Pick a make/model above, then save the alert.
           </div>
         </div>
-        <div class="col-12 row">
-          <button id="saveAlertBtn">Alert for This Search</button>
-          <span id="alertStatus" class="status"></span>
-        </div>
       </div>
-
+      <h3>Saved Alerts</h3>
       <div id="alertsList" class="alerts-list" aria-live="polite"></div>
     </div>
   </main>
