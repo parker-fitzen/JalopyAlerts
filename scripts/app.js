@@ -20,14 +20,9 @@ const els = {
   searchBtn: document.getElementById("searchBtn"),
   resetBtn: document.getElementById("resetBtn"),
   status: document.getElementById("status"),
-  alertMinYear: document.getElementById("alertMinYear"),
-  alertMaxYear: document.getElementById("alertMaxYear"),
-  enablePushBtn: document.getElementById("enablePushBtn"),
-  pushStatus: document.getElementById("pushStatus"),
   alertStatus: document.getElementById("alertStatus"),
   alertNotes: document.getElementById("alertNotes"),
   saveAlertBtn: document.getElementById("saveAlertBtn"),
-  refreshAlertsBtn: document.getElementById("refreshAlertsBtn"),
   alertsList: document.getElementById("alertsList"),
   results: document.getElementById("results"),
   yardCounts: document.getElementById("yardCounts"),
@@ -54,12 +49,6 @@ function setStatus(msg, kind = "") {
 function setAlertStatus(msg, kind = "") {
   els.alertStatus.className = "status" + (kind ? " " + kind : "");
   els.alertStatus.textContent = msg;
-}
-
-function setPushStatus(msg, kind = "") {
-  if (!els.pushStatus) return;
-  els.pushStatus.className = "muted-border" + (kind ? " " + kind : "");
-  els.pushStatus.textContent = msg;
 }
 
 function describeCurrentSelection() {
@@ -117,21 +106,6 @@ async function ensurePushSubscription() {
   return sub;
 }
 
-async function updatePushStatusText() {
-  try {
-    const reg = await ensureServiceWorkerReady();
-    const sub = await reg.pushManager.getSubscription();
-    if (sub) {
-      pushSubscription = sub;
-      setPushStatus("Push notifications are active for this browser.", "ok");
-    } else {
-      setPushStatus("Push notifications are not enabled yet. Click below and accept the prompt to turn them on.");
-    }
-  } catch (e) {
-    setPushStatus(e.message || "Push notifications are unavailable.", "err");
-  }
-}
-
 function subscriptionPayload(sub) {
   const json = sub?.toJSON?.();
   if (!json) return null;
@@ -147,11 +121,16 @@ function updateAlertNotes() {
     els.alertNotes.textContent = "Pick a make/model above, then save the alert.";
     return;
   }
-  const detail = selection.model ? `${selection.make} — ${selection.model}` : `${selection.make} (any model)`;
-  const minY = normalizeYear(els.alertMinYear.value);
-  const maxY = normalizeYear(els.alertMaxYear.value);
+  const detail = selection.model ? selection.model : "Any model";
+  const minY = normalizeYear(els.minYear.value);
+  const maxY = normalizeYear(els.maxYear.value);
   const yearText = describeYearRange(minY, maxY);
-  els.alertNotes.textContent = `Alert will track: ${detail} — ${yearText}.`;
+  const lines = [
+    `Make: ${selection.make}`,
+    `Model: ${detail}`,
+    `Year(s): ${yearText}`,
+  ];
+  els.alertNotes.innerHTML = lines.map(line => `<div>${escapeHtml(line)}</div>`).join("");
 }
 
 function clearResults(message = "") {
@@ -547,8 +526,8 @@ async function saveAlert() {
     return;
   }
 
-  const minYear = normalizeYear(els.alertMinYear.value);
-  const maxYear = normalizeYear(els.alertMaxYear.value);
+  const minYear = normalizeYear(els.minYear.value);
+  const maxYear = normalizeYear(els.maxYear.value);
   if (minYear !== null && maxYear !== null && minYear > maxYear) {
     setAlertStatus("Year range is backwards (min > max).", "err");
     return;
@@ -572,7 +551,6 @@ async function saveAlert() {
     });
     setAlertStatus("Alert saved.", "ok");
     await loadAlerts();
-    await updatePushStatusText();
   } catch (e) {
     setAlertStatus(e.message || "Failed to save alert.", "err");
   }
@@ -611,22 +589,9 @@ els.model.addEventListener("change", () => {
   updateAlertNotes();
 });
 
-els.alertMinYear.addEventListener("input", () => updateAlertNotes());
-els.alertMaxYear.addEventListener("input", () => updateAlertNotes());
-
 els.searchBtn.addEventListener("click", () => searchAllYards());
 
 els.saveAlertBtn.addEventListener("click", () => saveAlert());
-els.refreshAlertsBtn.addEventListener("click", () => loadAlerts());
-els.enablePushBtn.addEventListener("click", async () => {
-  setPushStatus("Requesting permission…");
-  try {
-    await ensurePushSubscription();
-    setPushStatus("Push notifications are active for this browser.", "ok");
-  } catch (e) {
-    setPushStatus(e.message || "Push permission denied.", "err");
-  }
-});
 
 els.resetBtn.addEventListener("click", async () => {
   els.minYear.value = "";
@@ -639,14 +604,11 @@ els.resetBtn.addEventListener("click", async () => {
   els.model.innerHTML = '<option value="">Select a make first</option>';
   els.model.disabled = true;
   els.searchBtn.disabled = true;
-  els.alertMinYear.value = "";
-  els.alertMaxYear.value = "";
   clearResults("Reset. Select a make.");
   els.yardCounts.innerHTML = "";
   setStatus("Reset.");
   updateAlertNotes();
   setAlertStatus("");
-  updatePushStatusText();
 });
 
 els.quickFilter.addEventListener("input", () => {
@@ -660,8 +622,14 @@ els.sort.addEventListener("change", () => {
 });
 
 // If user edits year range after search, re-filter instantly
-els.minYear.addEventListener("input", () => { if (lastRows.length) applyFiltersAndRender(); });
-els.maxYear.addEventListener("input", () => { if (lastRows.length) applyFiltersAndRender(); });
+els.minYear.addEventListener("input", () => {
+  if (lastRows.length) applyFiltersAndRender();
+  updateAlertNotes();
+});
+els.maxYear.addEventListener("input", () => {
+  if (lastRows.length) applyFiltersAndRender();
+  updateAlertNotes();
+});
 
 // Boot
 (async function init() {
@@ -669,7 +637,6 @@ els.maxYear.addEventListener("input", () => { if (lastRows.length) applyFiltersA
     await loadMakesAllYards();
     updateAlertNotes();
     await loadAlerts();
-    await updatePushStatusText();
   } catch (e) {
     setStatus("Failed to load makes. Check Worker URL + CORS.", "err");
     els.make.disabled = true;
