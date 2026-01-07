@@ -202,6 +202,43 @@ th {
   overflow: hidden;
 }
 
+.yard-logos {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.yard-logo-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  align-items: center;
+}
+
+.yard-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  min-height: 96px;
+  transition: transform 0.12s ease, box-shadow 0.15s ease;
+}
+
+.yard-logo:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.1);
+}
+
+.yard-logo img {
+  max-width: 100%;
+  max-height: 70px;
+  object-fit: contain;
+}
+
 .alerts-list .alert-row {
   display: flex;
   justify-content: space-between;
