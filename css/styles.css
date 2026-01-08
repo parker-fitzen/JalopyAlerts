@@ -276,6 +276,10 @@ th {
   background: #fef2f2;
 }
 
+#alertsCard {
+  margin-top: 16px;
+}
+
 .yard-logos {
   margin-top: 16px;
 }
