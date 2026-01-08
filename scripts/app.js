@@ -287,7 +287,7 @@ function renderYardCounts(rows) {
   for (const y of YARDS) {
     const div = document.createElement("div");
     div.className = "pill";
-    div.textContent = `${y.name}: ${counts.get(y.name) || 0}`;
+    div.textContent = `${displayYardName(y.name)}: ${counts.get(y.name) || 0}`;
     frag.appendChild(div);
   }
   els.yardCounts.appendChild(frag);
