@@ -12,6 +12,8 @@ const YARDS = [
   { id: "trusty", name: "TRUSTY'S" },
 ];
 
+const JALOPY_YARD_NAMES = new Set(YARDS.filter(y => y.name !== "TRUSTY'S").map(y => y.name));
+
 const els = {
   make: document.getElementById("make"),
   model: document.getElementById("model"),
@@ -186,6 +188,16 @@ function normalizeYear(v) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+function normalizeYardName(name) {
+  return String(name || "").trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+function displayYardName(name) {
+  const normalized = normalizeYardName(name);
+  if (JALOPY_YARD_NAMES.has(normalized)) return `JJ ${normalized}`;
+  return normalized;
+}
+
 function describeYearRange(minY, maxY) {
   const hasMin = minY !== null;
   const hasMax = maxY !== null;
@@ -254,7 +266,7 @@ function renderRows(rows) {
   for (const r of rows) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${escapeHtml(r.yardName)}</td>
+      <td>${escapeHtml(displayYardName(r.yardName))}</td>
       <td>${escapeHtml(String(r.year))}</td>
       <td>${escapeHtml(r.make)}</td>
       <td>${escapeHtml(r.model)}</td>
@@ -412,7 +424,9 @@ async function searchAllYards() {
       VehicleMake: make,
       VehicleModel: model || "",
     });
-    allRows = Array.isArray(data?.results) ? data.results : [];
+    allRows = Array.isArray(data?.results)
+      ? data.results.map(row => ({ ...row, yardName: normalizeYardName(row?.yardName) }))
+      : [];
   } catch (e) {
     failures = [e];
   }
