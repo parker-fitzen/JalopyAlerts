@@ -489,10 +489,16 @@ async function handleAlerts(request, env, allowedOrigin = "*") {
     if (!kv) return json({ error: "KV namespace not configured" }, 500, {}, allowedOrigin);
 
     const ownerKey = await hashOwner(request, env);
+    const endpoint = normalizeText(url.searchParams.get("endpoint") || "");
 
     const saved = await kv.get(SAVED_SEARCHES_KV_KEY, { type: "json" });
     const searches = Array.isArray(saved) ? saved : [];
-    const mine = searches.filter((s) => s.ownerKey === ownerKey);
+    const mine = searches.filter((s) =>
+      matchesAlertOwner(s, {
+        ownerKey,
+        endpoint,
+      })
+    );
     return json({ count: mine.length, alerts: mine.map(redactSearchForClient) }, 200, {}, allowedOrigin);
   }
 
@@ -568,13 +574,17 @@ async function handleAlerts(request, env, allowedOrigin = "*") {
     if (!kv) return json({ error: "KV namespace not configured" }, 500, {}, allowedOrigin);
 
     const ownerKey = await hashOwner(request, env);
+    const payload = await readBodyParams(request);
+    const endpoint = normalizeText(payload.endpoint || "");
     const id = (idFromPath || url.searchParams.get("id") || "").trim();
     if (!id) return json({ error: "id is required" }, 400, {}, allowedOrigin);
 
     const saved = await kv.get(SAVED_SEARCHES_KV_KEY, { type: "json" });
     const searches = Array.isArray(saved) ? saved : [];
     const before = searches.length;
-    const remaining = searches.filter((s) => !(s.id === id && s.ownerKey === ownerKey));
+    const remaining = searches.filter(
+      (s) => !(s.id === id && matchesAlertOwner(s, { ownerKey, endpoint }))
+    );
     if (remaining.length === before) return json({ error: "Not found" }, 404, {}, allowedOrigin);
 
     await kv.put(SAVED_SEARCHES_KV_KEY, JSON.stringify(remaining));
@@ -582,6 +592,13 @@ async function handleAlerts(request, env, allowedOrigin = "*") {
   }
 
   return json({ error: "Method not allowed" }, 405, {}, allowedOrigin);
+}
+
+function matchesAlertOwner(search, { ownerKey = "", endpoint = "" } = {}) {
+  if (!search) return false;
+  if (ownerKey && search.ownerKey === ownerKey) return true;
+  if (endpoint && normalizeText(search.pushEndpoint || "") === endpoint) return true;
+  return false;
 }
 
 async function handleNotificationPoll(request, env, allowedOrigin = "*") {
