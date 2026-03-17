@@ -117,6 +117,19 @@ function subscriptionPayload(sub) {
   };
 }
 
+async function getExistingSubscriptionPayload() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return null;
+  try {
+    const reg = await ensureServiceWorkerReady();
+    const sub = pushSubscription || (await reg.pushManager.getSubscription());
+    if (!sub) return null;
+    pushSubscription = sub;
+    return subscriptionPayload(sub);
+  } catch (_err) {
+    return null;
+  }
+}
+
 function updateAlertNotes() {
   const selection = describeCurrentSelection();
   if (!selection) {
@@ -522,7 +535,9 @@ function renderAlerts(alerts, errorMsg = "") {
 async function loadAlerts() {
   try {
     setAlertStatus("Loading saved alerts…");
-    const data = await alertsApi("", { method: "GET" });
+    const currentSub = await getExistingSubscriptionPayload();
+    const endpoint = currentSub?.endpoint ? `?endpoint=${encodeURIComponent(currentSub.endpoint)}` : "";
+    const data = await alertsApi(endpoint, { method: "GET" });
     alertsCache = data.alerts || [];
     renderAlerts(alertsCache);
     setAlertStatus(`Loaded ${alertsCache.length} alert(s).`, "ok");
@@ -574,7 +589,11 @@ async function deleteAlert(id) {
   if (!id) return;
   setAlertStatus("Deleting alert…");
   try {
-    await alertsApi(`/${encodeURIComponent(id)}`, { method: "DELETE" });
+    const currentSub = await getExistingSubscriptionPayload();
+    await alertsApi(`/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: { endpoint: currentSub?.endpoint || "" },
+    });
     alertsCache = alertsCache.filter(a => a.id !== id);
     renderAlerts(alertsCache);
     setAlertStatus("Alert deleted.", "ok");
