@@ -224,6 +224,16 @@ th {
   border-bottom: none;
 }
 
+
+.alerts-list .alert-row[role="button"] {
+  cursor: pointer;
+}
+
+.alerts-list .alert-row[role="button"]:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
 .alert-primary {
   font-weight: 700;
   color: #0f172a;

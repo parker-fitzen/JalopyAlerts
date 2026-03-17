@@ -233,6 +233,33 @@ function extractAlertYearRange(alert) {
   };
 }
 
+async function populateSearchFromAlert(alert) {
+  if (!alert?.VehicleMake) return;
+
+  const make = String(alert.VehicleMake).trim();
+  const model = String(alert.VehicleModel || "").trim();
+  const { minYear, maxYear } = extractAlertYearRange(alert);
+
+  els.quickFilter.value = "";
+  lastRows = [];
+  els.make.value = make;
+  await loadModelsAllYards(make);
+
+  if (model && Array.from(els.model.options).some(opt => opt.value === model)) {
+    els.model.value = model;
+  } else {
+    els.model.value = "";
+  }
+
+  els.minYear.value = minYear ?? "";
+  els.maxYear.value = maxYear ?? "";
+  els.sort.value = "year_desc";
+  clearResults("Search updated from saved alert. Click Search all yards to run.");
+  els.yardCounts.innerHTML = "";
+  updateAlertNotes();
+  setStatus(`Loaded saved search: ${make}${model ? ` ${model}` : ""}.`, "ok");
+}
+
 function applyFiltersAndRender() {
   const q = (els.quickFilter.value || "").trim().toUpperCase();
   const minY = normalizeYear(els.minYear.value);
@@ -490,6 +517,9 @@ function renderAlerts(alerts, errorMsg = "") {
   for (const a of alerts) {
     const row = document.createElement("div");
     row.className = "alert-row";
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    row.setAttribute("aria-label", `Load saved search for ${a.VehicleMake}${a.VehicleModel ? ` ${a.VehicleModel}` : " any model"}`);
 
     const left = document.createElement("div");
     const headline = document.createElement("div");
@@ -523,6 +553,17 @@ function renderAlerts(alerts, errorMsg = "") {
     del.textContent = "Delete";
     del.addEventListener("click", () => deleteAlert(a.id));
     actions.appendChild(del);
+
+    row.addEventListener("click", async (ev) => {
+      if (ev.target instanceof HTMLElement && ev.target.closest("button")) return;
+      await populateSearchFromAlert(a);
+    });
+
+    row.addEventListener("keydown", async (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      ev.preventDefault();
+      await populateSearchFromAlert(a);
+    });
 
     row.appendChild(left);
     row.appendChild(actions);
