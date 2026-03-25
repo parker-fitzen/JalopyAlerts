@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Jalopy Alerts Test Preview</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <img src="/jalopyalerts_transparent_nearwhite_blackoutline.png" alt="Jalopy Alerts Logo" style="max-height: 8vh" />
+      <p>Test preview mode — dummy data only. This page shows what notifications and NEW arrivals look like.</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="card">
+      <h2 style="margin-top: 0;">Push Notification Preview</h2>
+      <div id="notificationPreview" class="muted-border ok" aria-live="polite"></div>
+      <p class="footer-note" style="margin-top: 8px;">This is a visual preview of a mock push notification payload.</p>
+    </div>
+
+    <div class="card" style="margin-top: 16px;">
+      <h2 style="margin-top: 0;">Mock Search Results (with NEW arrival)</h2>
+      <div style="margin-top: 12px; max-height: 56vh; overflow: auto; border-radius: 12px; border: 1px solid #eee;">
+        <table>
+          <thead>
+            <tr>
+              <th style="min-width: 75px;">YARD</th>
+              <th style="min-width: 40px;">YEAR</th>
+              <th style="min-width: 100px;">MAKE</th>
+              <th style="min-width: 120px;">MODEL</th>
+              <th style="min-width: 40px;">ROW</th>
+            </tr>
+          </thead>
+          <tbody id="testResults"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top: 16px;" id="alertsCard">
+      <h2 style="margin-top: 0;">Fake Saved Searches</h2>
+      <span class="status ok">Loaded 3 fake alert(s).</span>
+      <div id="testAlerts" class="alerts-list" aria-live="polite"></div>
+    </div>
+  </main>
+
+  <script src="/scripts/test-page.js"></script>
+</body>
+</html>

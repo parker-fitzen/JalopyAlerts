@@ -734,7 +734,15 @@ function pickAllowedOrigin(request, env) {
 function buildNotificationPayload(search, newVehicles) {
   const detail = `${describeYearRangeText(search)} ${search.VehicleMake}${search.VehicleModel ? ` ${search.VehicleModel}` : ""}`;
   const yardNames = Array.from(new Set(newVehicles.map((r) => r.yardName))).join(", ");
-  const body = `${newVehicles.length} new arrival(s) at ${yardNames || "unknown yard"}.`;
+  const arrivalDate = new Date().toISOString();
+  const arrivalDateText = formatArrivalDate(arrivalDate);
+  const summarizedArrivals = newVehicles
+    .slice(0, 3)
+    .map((r) => `${r.year} row ${r.row} (${displayYardName(r.yardName)}) — ${arrivalDateText}`)
+    .join("; ");
+  const extraCount = newVehicles.length > 3 ? ` +${newVehicles.length - 3} more` : "";
+  const body = `${newVehicles.length} new arrival(s) at ${yardNames || "unknown yard"}. ${summarizedArrivals}${extraCount}`;
+  const newVehicleKeys = newVehicles.map(inventoryKey);
   return {
     title: `Jalopy Alerts: ${detail}`,
     body,
@@ -742,8 +750,33 @@ function buildNotificationPayload(search, newVehicles) {
       alertId: search.id,
       count: newVehicles.length,
       yards: yardNames,
+      arrivalDate,
+      newVehicleKeys,
+      url: buildNotificationUrl(search.id, newVehicleKeys),
     },
   };
+}
+
+function buildNotificationUrl(alertId, keys) {
+  const params = new URLSearchParams();
+  params.set("source", "notification");
+  params.set("alert", String(alertId || "").trim());
+  const compact = (keys || []).map((k) => encodeURIComponent(String(k))).join(",");
+  if (compact) params.set("newKeys", compact);
+  return `/?${params.toString()}`;
+}
+
+function formatArrivalDate(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "unknown date";
+  return d.toISOString().slice(0, 10);
+}
+
+function displayYardName(name) {
+  const normalized = normalizeText(name || "").toUpperCase();
+  if (!normalized) return "Unknown Yard";
+  if (normalized === "TRUSTY'S") return "TRUSTY'S";
+  return `JJ ${normalized}`;
 }
 
 function describeYearRangeText(search) {
