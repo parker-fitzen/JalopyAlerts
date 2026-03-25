@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Jalopy Alerts — Test Preview</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <img src="/jalopyalerts_transparent_nearwhite_blackoutline.png" alt="Jalopy Alerts Logo" style="max-height: 8vh"/>
+      <p>Test mode preview for notifications, saved searches, and new arrivals.</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="card">
+      <h2 style="margin-top: 0;">/test Preview</h2>
+      <p class="muted">This page is mocked data only. It does not call live inventory or push endpoints.</p>
+
+      <div class="test-notification" id="notificationPreview"></div>
+    </div>
+
+    <div class="card" style="margin-top: 16px;">
+      <div class="row" style="justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <h2 style="margin: 0;">Search (Mock)</h2>
+        <button id="runMockSearch" class="secondary">Reload Mock Results</button>
+      </div>
+
+      <div class="grid controls" style="margin-top: 12px;">
+        <div class="col-4">
+          <label for="make">Make</label>
+          <select id="make"></select>
+        </div>
+
+        <div class="col-4">
+          <label for="model">Model</label>
+          <select id="model"></select>
+        </div>
+
+        <div class="col-2">
+          <label for="minYear">Min year</label>
+          <input id="minYear" type="number" inputmode="numeric" />
+        </div>
+
+        <div class="col-2">
+          <label for="maxYear">Max year</label>
+          <input id="maxYear" type="number" inputmode="numeric" />
+        </div>
+
+        <div class="col-12 row">
+          <span id="status" class="status"></span>
+        </div>
+      </div>
+
+      <div style="margin-top: 12px; max-height: 56vh; overflow: auto; border-radius: 12px; border: 1px solid #eee;">
+        <table>
+          <thead>
+            <tr>
+              <th style="min-width: 75px;">YARD</th>
+              <th style="min-width: 40px;">YEAR</th>
+              <th style="min-width: 100px;">MAKE</th>
+              <th style="min-width: 120px;">MODEL</th>
+              <th style="min-width: 40px;">ROW</th>
+            </tr>
+          </thead>
+          <tbody id="results"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" id="alertsCard">
+      <h2 style="margin-top: 0;">Saved Alerts (Mock)</h2>
+      <p class="muted">Click a saved alert to load and preview its mock arrivals.</p>
+      <div id="alertsList" class="alerts-list" aria-live="polite"></div>
+    </div>
+  </main>
+
+  <script src="/test/test.js"></script>
+</body>
+</html>
