@@ -42,6 +42,8 @@ let alertsCache = [];
 let pushSubscription = null;
 let vapidPublicKey = null;
 let swReadyPromise = null;
+let highlightedNewKeys = new Set();
+let pendingAlertOpenPayload = parseAlertPayloadFromUrl();
 
 function setStatus(msg, kind = "") {
   els.status.className = "status" + (kind ? " " + kind : "");
@@ -149,6 +151,7 @@ function updateAlertNotes() {
 }
 
 function clearResults(message = "") {
+  highlightedNewKeys = new Set();
   els.results.innerHTML = "";
   const tr = document.createElement("tr");
   const td = document.createElement("td");
@@ -203,6 +206,17 @@ function normalizeYear(v) {
 
 function normalizeYardName(name) {
   return String(name || "").trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+function inventoryKey(row) {
+  return [row?.yardId, row?.year, row?.make, row?.model, row?.row].map((v) => String(v || "")).join(":");
+}
+
+function parseAlertPayloadFromUrl() {
+  const params = new URLSearchParams(window.location.search || "");
+  const alertId = (params.get("alertId") || "").trim();
+  if (!alertId) return null;
+  return { alertId, arrivals: [], detectedAt: null };
 }
 
 function displayYardName(name) {
@@ -304,12 +318,13 @@ function renderRows(rows) {
   }
   const frag = document.createDocumentFragment();
   for (const r of rows) {
+    const isNew = highlightedNewKeys.has(inventoryKey(r));
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${escapeHtml(displayYardName(r.yardName))}</td>
       <td>${escapeHtml(String(r.year))}</td>
       <td>${escapeHtml(r.make)}</td>
-      <td>${escapeHtml(r.model)}</td>
+      <td>${escapeHtml(r.model)}${isNew ? ' <span class="new-badge">NEW</span>' : ""}</td>
       <td>${escapeHtml(r.row)}</td>
     `;
     frag.appendChild(tr);
@@ -643,6 +658,33 @@ async function deleteAlert(id) {
   }
 }
 
+async function processAlertOpenPayload(payload) {
+  if (!payload?.alertId) return;
+  const alert = alertsCache.find((a) => a.id === payload.alertId);
+  if (!alert) return;
+
+  await populateSearchFromAlert(alert);
+  await searchAllYards();
+
+  const arrivals = Array.isArray(payload.arrivals) ? payload.arrivals : [];
+  highlightedNewKeys = new Set(
+    arrivals
+      .map((r) =>
+        inventoryKey({
+          ...r,
+          yardName: normalizeYardName(r?.yardName),
+        })
+      )
+      .filter(Boolean)
+  );
+  if (highlightedNewKeys.size) {
+    applyFiltersAndRender();
+  }
+
+  const detected = payload.detectedAt ? formatTimestamp(payload.detectedAt) : "recently";
+  setStatus(`Loaded alert and highlighted ${highlightedNewKeys.size || 0} new arrival(s) from ${detected}.`, "ok");
+}
+
 // Event wiring
 els.make.addEventListener("change", async () => {
   const make = (els.make.value || "").trim();
@@ -705,12 +747,30 @@ els.maxYear.addEventListener("input", () => {
   updateAlertNotes();
 });
 
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    const data = event?.data || {};
+    if (data?.type !== "jalopy-alert-open") return;
+    pendingAlertOpenPayload = data.payload || null;
+    processAlertOpenPayload(pendingAlertOpenPayload).catch((err) => {
+      console.error("failed to process alert open payload", err);
+    });
+  });
+}
+
 // Boot
 (async function init() {
   try {
     await loadMakesAllYards();
     updateAlertNotes();
     await loadAlerts();
+    if (pendingAlertOpenPayload) {
+      await processAlertOpenPayload(pendingAlertOpenPayload);
+      pendingAlertOpenPayload = null;
+      const u = new URL(window.location.href);
+      u.searchParams.delete("alertId");
+      window.history.replaceState({}, "", u.toString());
+    }
   } catch (e) {
     setStatus("Failed to load makes. Check Worker URL + CORS.", "err");
     els.make.disabled = true;

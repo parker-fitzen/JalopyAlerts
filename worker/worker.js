@@ -734,7 +734,22 @@ function pickAllowedOrigin(request, env) {
 function buildNotificationPayload(search, newVehicles) {
   const detail = `${describeYearRangeText(search)} ${search.VehicleMake}${search.VehicleModel ? ` ${search.VehicleModel}` : ""}`;
   const yardNames = Array.from(new Set(newVehicles.map((r) => r.yardName))).join(", ");
-  const body = `${newVehicles.length} new arrival(s) at ${yardNames || "unknown yard"}.`;
+  const detectedAt = new Date().toISOString();
+  const latest = newVehicles[0] || null;
+  const latestYear = latest?.year ? ` ${latest.year}` : "";
+  const latestRow = latest?.row ? ` row ${latest.row}` : "";
+  const latestYard = latest?.yardName ? ` at ${latest.yardName}` : "";
+  const summary = `${newVehicles.length} new arrival(s)${latestYear}${latestRow}${latestYard}.`;
+  const body = `${summary} Date: ${new Date(detectedAt).toLocaleDateString("en-US")}.`;
+  const arrivalRows = (newVehicles || []).slice(0, 20).map((r) => ({
+    yardId: r?.yardId || null,
+    yardName: r?.yardName || "",
+    year: r?.year || null,
+    make: r?.make || "",
+    model: r?.model || "",
+    row: r?.row || "",
+    detectedAt,
+  }));
   return {
     title: `Jalopy Alerts: ${detail}`,
     body,
@@ -742,6 +757,9 @@ function buildNotificationPayload(search, newVehicles) {
       alertId: search.id,
       count: newVehicles.length,
       yards: yardNames,
+      arrivals: arrivalRows,
+      detectedAt,
+      url: `/?alertId=${encodeURIComponent(search.id)}`,
     },
   };
 }

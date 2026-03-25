@@ -6,8 +6,7 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const url = event.notification?.data?.url || self.location.origin;
-  event.waitUntil(clients.openWindow(url));
+  event.waitUntil(handleNotificationClick(event.notification?.data || {}));
 });
 
 async function handlePush() {
@@ -27,5 +26,29 @@ async function handlePush() {
     });
   } catch (err) {
     console.error("push handler failed", err);
+  }
+}
+
+async function handleNotificationClick(data) {
+  const targetPath = data?.url || `/?alertId=${encodeURIComponent(data?.alertId || "")}`;
+  const targetUrl = new URL(targetPath, self.location.origin).toString();
+  const windows = await clients.matchAll({ type: "window", includeUncontrolled: true });
+
+  for (const client of windows) {
+    try {
+      const current = new URL(client.url);
+      if (current.origin === self.location.origin) {
+        await client.focus();
+        client.postMessage({ type: "jalopy-alert-open", payload: data });
+        return;
+      }
+    } catch (_err) {
+      // ignore malformed client urls
+    }
+  }
+
+  const opened = await clients.openWindow(targetUrl);
+  if (opened) {
+    opened.postMessage({ type: "jalopy-alert-open", payload: data });
   }
 }

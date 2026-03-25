@@ -257,6 +257,12 @@ th {
 
 .chip small { color: inherit; }
 
+.new-badge {
+  color: #16a34a;
+  font-weight: 700;
+  margin-left: 6px;
+}
+
 .alert-actions {
   display: flex;
   gap: 8px;
