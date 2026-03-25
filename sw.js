@@ -6,7 +6,16 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const url = event.notification?.data?.url || self.location.origin;
+  const nData = event.notification?.data || {};
+  let url = nData.url || self.location.origin;
+  if (nData.alertId) {
+    const next = new URL(url, self.location.origin);
+    next.searchParams.set("alertId", String(nData.alertId));
+    if (Array.isArray(nData.newVehicleKeys) && nData.newVehicleKeys.length) {
+      next.searchParams.set("newKeys", nData.newVehicleKeys.join(","));
+    }
+    url = next.toString();
+  }
   event.waitUntil(clients.openWindow(url));
 });
 

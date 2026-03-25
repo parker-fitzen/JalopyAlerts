@@ -263,6 +263,13 @@ th {
   align-items: center;
 }
 
+.result-new-tag {
+  display: inline-block;
+  margin-left: 6px;
+  font-weight: 800;
+  color: #16a34a;
+}
+
 .alert-actions button {
   padding: 8px 10px;
   font-size: 12px;

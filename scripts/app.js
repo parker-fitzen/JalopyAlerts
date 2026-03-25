@@ -42,6 +42,7 @@ let alertsCache = [];
 let pushSubscription = null;
 let vapidPublicKey = null;
 let swReadyPromise = null;
+let highlightedNewKeys = new Set();
 
 function setStatus(msg, kind = "") {
   els.status.className = "status" + (kind ? " " + kind : "");
@@ -234,6 +235,11 @@ function extractAlertYearRange(alert) {
 }
 
 async function populateSearchFromAlert(alert) {
+  return await populateSearchFromAlertWithOptions(alert, {});
+}
+
+async function populateSearchFromAlertWithOptions(alert, options = {}) {
+  const { runSearch = false, preserveHighlight = false } = options;
   if (!alert?.VehicleMake) return;
 
   const make = String(alert.VehicleMake).trim();
@@ -258,6 +264,10 @@ async function populateSearchFromAlert(alert) {
   els.yardCounts.innerHTML = "";
   updateAlertNotes();
   setStatus(`Loaded saved search: ${make}${model ? ` ${model}` : ""}.`, "ok");
+
+  if (runSearch) {
+    await searchAllYards({ preserveHighlight });
+  }
 }
 
 function applyFiltersAndRender() {
@@ -304,17 +314,22 @@ function renderRows(rows) {
   }
   const frag = document.createDocumentFragment();
   for (const r of rows) {
+    const isNew = highlightedNewKeys.has(inventoryKey(r));
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${escapeHtml(displayYardName(r.yardName))}</td>
       <td>${escapeHtml(String(r.year))}</td>
       <td>${escapeHtml(r.make)}</td>
       <td>${escapeHtml(r.model)}</td>
-      <td>${escapeHtml(r.row)}</td>
+      <td>${escapeHtml(r.row)}${isNew ? ' <span class="result-new-tag">NEW</span>' : ""}</td>
     `;
     frag.appendChild(tr);
   }
   els.results.appendChild(frag);
+}
+
+function inventoryKey(row) {
+  return [row?.yardId, row?.year, row?.make, row?.model, row?.row].map((v) => String(v || "")).join(":");
 }
 
 function renderYardCounts(rows) {
@@ -436,9 +451,10 @@ function populateModels(models) {
   els.searchBtn.disabled = false;
 }
 
-async function searchAllYards() {
+async function searchAllYards({ preserveHighlight = false } = {}) {
   const make = (els.make.value || "").trim();
   const model = (els.model.value || "").trim();
+  if (!preserveHighlight) highlightedNewKeys = new Set();
 
   if (!make) {
     setStatus("Pick a make first.", "err");
@@ -556,13 +572,13 @@ function renderAlerts(alerts, errorMsg = "") {
 
     row.addEventListener("click", async (ev) => {
       if (ev.target instanceof HTMLElement && ev.target.closest("button")) return;
-      await populateSearchFromAlert(a);
+      await populateSearchFromAlertWithOptions(a, {});
     });
 
     row.addEventListener("keydown", async (ev) => {
       if (ev.key !== "Enter" && ev.key !== " ") return;
       ev.preventDefault();
-      await populateSearchFromAlert(a);
+      await populateSearchFromAlertWithOptions(a, {});
     });
 
     row.appendChild(left);
@@ -648,6 +664,7 @@ els.make.addEventListener("change", async () => {
   const make = (els.make.value || "").trim();
   els.quickFilter.value = "";
   lastRows = [];
+  highlightedNewKeys = new Set();
   clearResults("Loading models…");
   els.yardCounts.innerHTML = "";
   await loadModelsAllYards(make);
@@ -658,6 +675,7 @@ els.make.addEventListener("change", async () => {
 els.model.addEventListener("change", () => {
   els.quickFilter.value = "";
   lastRows = [];
+  highlightedNewKeys = new Set();
   clearResults("Ready to search.");
   els.yardCounts.innerHTML = "";
   updateAlertNotes();
@@ -674,6 +692,7 @@ els.resetBtn.addEventListener("click", async () => {
   els.sort.value = "year_desc";
   modelsCache.clear();
   lastRows = [];
+  highlightedNewKeys = new Set();
   els.make.value = "";
   els.model.innerHTML = '<option value="">Select a make first</option>';
   els.model.disabled = true;
@@ -711,6 +730,7 @@ els.maxYear.addEventListener("input", () => {
     await loadMakesAllYards();
     updateAlertNotes();
     await loadAlerts();
+    await handleNotificationOpenContext();
   } catch (e) {
     setStatus("Failed to load makes. Check Worker URL + CORS.", "err");
     els.make.disabled = true;
@@ -721,3 +741,26 @@ els.maxYear.addEventListener("input", () => {
     setAlertStatus("Alerts unavailable.", "err");
   }
 })();
+
+async function handleNotificationOpenContext() {
+  const params = new URLSearchParams(window.location.search);
+  const alertId = (params.get("alertId") || "").trim();
+  if (!alertId) return;
+
+  const alert = alertsCache.find((a) => a.id === alertId);
+  if (!alert) return;
+
+  const rawKeys = (params.get("newKeys") || "").trim();
+  const keys = rawKeys ? rawKeys.split(",").map((k) => k.trim()).filter(Boolean) : [];
+  highlightedNewKeys = new Set(keys);
+
+  await populateSearchFromAlertWithOptions(alert, {
+    runSearch: true,
+    preserveHighlight: true,
+  });
+
+  const cleaned = new URL(window.location.href);
+  cleaned.searchParams.delete("alertId");
+  cleaned.searchParams.delete("newKeys");
+  window.history.replaceState({}, "", cleaned.toString());
+}

@@ -457,7 +457,10 @@ function yearRangesEqual(a, b) {
 
 function diffNewVehicles(current, previous) {
   const prevKeys = new Set((previous || []).map(inventoryKey));
-  return (current || []).filter((row) => !prevKeys.has(inventoryKey(row)));
+  const detectedAt = new Date().toISOString();
+  return (current || [])
+    .filter((row) => !prevKeys.has(inventoryKey(row)))
+    .map((row) => ({ ...row, detectedAt }));
 }
 
 function inventoryKey(row) {
@@ -734,7 +737,12 @@ function pickAllowedOrigin(request, env) {
 function buildNotificationPayload(search, newVehicles) {
   const detail = `${describeYearRangeText(search)} ${search.VehicleMake}${search.VehicleModel ? ` ${search.VehicleModel}` : ""}`;
   const yardNames = Array.from(new Set(newVehicles.map((r) => r.yardName))).join(", ");
-  const body = `${newVehicles.length} new arrival(s) at ${yardNames || "unknown yard"}.`;
+  const first = newVehicles[0] || {};
+  const arrivalDate = formatArrivalDate(first.detectedAt);
+  const firstDetail = `${first.year || "Unknown year"} in row ${first.row || "?"} (${first.yardName || "unknown yard"}) on ${arrivalDate}`;
+  const extra = newVehicles.length > 1 ? ` +${newVehicles.length - 1} more.` : ".";
+  const body = `${firstDetail}${extra}`;
+  const newVehicleKeys = newVehicles.map((r) => inventoryKey(r)).filter(Boolean);
   return {
     title: `Jalopy Alerts: ${detail}`,
     body,
@@ -742,8 +750,16 @@ function buildNotificationPayload(search, newVehicles) {
       alertId: search.id,
       count: newVehicles.length,
       yards: yardNames,
+      newVehicleKeys,
+      url: "/",
     },
   };
+}
+
+function formatArrivalDate(ts) {
+  const d = new Date(ts || Date.now());
+  if (Number.isNaN(d.getTime())) return "unknown date";
+  return d.toISOString().slice(0, 10);
 }
 
 function describeYearRangeText(search) {
