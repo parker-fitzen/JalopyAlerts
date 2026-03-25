@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Jalopy Alerts Test Preview</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+  <style>
+    .test-badge {
+      display: inline-flex;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 8px;
+      border-radius: 999px;
+      color: #1f2937;
+      background: #ffedd5;
+      border: 1px solid #fdba74;
+      margin-left: 6px;
+    }
+
+    .notification-preview {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      background: #fff;
+    }
+
+    .notification-title {
+      font-weight: 800;
+      margin-bottom: 6px;
+    }
+
+    .notification-body {
+      color: #374151;
+      font-size: 14px;
+      line-height: 1.45;
+      margin-bottom: 10px;
+    }
+
+    .helper {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <img src="/jalopyalerts_transparent_nearwhite_blackoutline.png" alt="Jalopy Alerts Logo" style="max-height: 8vh"/>
+      <p>Test mode preview for saved searches, notifications, and highlighted new arrivals.</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="card" style="margin-bottom: 16px;">
+      <div class="row" style="justify-content: space-between; align-items: center;">
+        <h2 style="margin: 0;">/test Preview <span class="test-badge">FAKE DATA</span></h2>
+      </div>
+      <p class="muted" style="margin-bottom: 0;">
+        This page is static demo data so you can preview what notification messaging and <span class="new-arrival-tag">NEW</span>
+        row highlighting will look like in production.
+      </p>
+    </div>
+
+    <div class="card" style="margin-bottom: 16px;">
+      <h2 style="margin-top: 0;">Notification Preview</h2>
+      <div class="notification-preview">
+        <div id="notificationTitle" class="notification-title"></div>
+        <div id="notificationBody" class="notification-body"></div>
+        <div class="helper">Tap/clicking the real notification opens the saved search and marks matching arrivals with <strong>NEW</strong>.</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 16px;">
+      <div class="row" style="justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <h2 style="margin: 0;">Saved Alerts (Demo)</h2>
+      </div>
+      <span id="alertStatus" class="status ok">Loaded demo alerts.</span>
+      <div id="alertsList" class="alerts-list" aria-live="polite"></div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top: 0;">Search Results Preview</h2>
+      <div id="searchContext" class="muted" style="margin-bottom: 10px;"></div>
+      <div style="max-height: 56vh; overflow: auto; border-radius: 12px; border: 1px solid #eee;">
+        <table>
+          <thead>
+            <tr>
+              <th style="min-width: 75px;">YARD</th>
+              <th style="min-width: 40px;">YEAR</th>
+              <th style="min-width: 100px;">MAKE</th>
+              <th style="min-width: 120px;">MODEL</th>
+              <th style="min-width: 40px;">ROW</th>
+            </tr>
+          </thead>
+          <tbody id="results"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <script src="/test/scripts/preview.js"></script>
+</body>
+</html>
