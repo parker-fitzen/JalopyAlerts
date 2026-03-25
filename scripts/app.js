@@ -42,6 +42,7 @@ let alertsCache = [];
 let pushSubscription = null;
 let vapidPublicKey = null;
 let swReadyPromise = null;
+let highlightedNewVehicleKeys = new Set();
 
 function setStatus(msg, kind = "") {
   els.status.className = "status" + (kind ? " " + kind : "");
@@ -233,7 +234,47 @@ function extractAlertYearRange(alert) {
   };
 }
 
-async function populateSearchFromAlert(alert) {
+function clearHighlightedNewArrivals() {
+  highlightedNewVehicleKeys = new Set();
+}
+
+function inventoryKeyForRow(row) {
+  return [
+    String(row?.yardId || "").trim(),
+    String(row?.year || "").trim(),
+    String(row?.make || "").trim().toUpperCase(),
+    String(row?.model || "").trim().toUpperCase(),
+    String(row?.row || "").trim().toUpperCase(),
+  ].join(":");
+}
+
+function parseNotificationLaunchContext() {
+  const params = new URLSearchParams(window.location.search || "");
+  const source = params.get("source");
+  const alertId = (params.get("alert") || "").trim();
+  const keysRaw = (params.get("newKeys") || "").trim();
+  if (source !== "notification" || !alertId) return null;
+
+  const keys = keysRaw
+    .split(",")
+    .map((k) => decodeURIComponent(k).trim())
+    .filter(Boolean);
+
+  return { alertId, keys };
+}
+
+function clearNotificationLaunchParams() {
+  const params = new URLSearchParams(window.location.search || "");
+  if (!params.has("source") && !params.has("alert") && !params.has("newKeys")) return;
+  params.delete("source");
+  params.delete("alert");
+  params.delete("newKeys");
+  const next = params.toString();
+  const nextUrl = `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash || ""}`;
+  window.history.replaceState({}, "", nextUrl);
+}
+
+async function populateSearchFromAlert(alert, { autoSearch = false, notificationKeys = [] } = {}) {
   if (!alert?.VehicleMake) return;
 
   const make = String(alert.VehicleMake).trim();
@@ -254,9 +295,18 @@ async function populateSearchFromAlert(alert) {
   els.minYear.value = minYear ?? "";
   els.maxYear.value = maxYear ?? "";
   els.sort.value = "year_desc";
-  clearResults("Search updated from saved alert. Click Search all yards to run.");
+  clearHighlightedNewArrivals();
+  if (notificationKeys.length) {
+    highlightedNewVehicleKeys = new Set(notificationKeys.map((k) => String(k).trim()).filter(Boolean));
+  }
+  clearResults(autoSearch ? "Running saved search…" : "Search updated from saved alert. Click Search all yards to run.");
   els.yardCounts.innerHTML = "";
   updateAlertNotes();
+  if (autoSearch) {
+    setStatus(`Loaded saved search: ${make}${model ? ` ${model}` : ""}. Running search…`, "ok");
+    await searchAllYards();
+    return;
+  }
   setStatus(`Loaded saved search: ${make}${model ? ` ${model}` : ""}.`, "ok");
 }
 
@@ -305,11 +355,14 @@ function renderRows(rows) {
   const frag = document.createDocumentFragment();
   for (const r of rows) {
     const tr = document.createElement("tr");
+    const rowKey = inventoryKeyForRow(r);
+    const isNewArrival = highlightedNewVehicleKeys.has(rowKey);
+    const newBadge = isNewArrival ? ' <span class="new-arrival-tag">NEW</span>' : "";
     tr.innerHTML = `
       <td>${escapeHtml(displayYardName(r.yardName))}</td>
       <td>${escapeHtml(String(r.year))}</td>
       <td>${escapeHtml(r.make)}</td>
-      <td>${escapeHtml(r.model)}</td>
+      <td>${escapeHtml(r.model)}${newBadge}</td>
       <td>${escapeHtml(r.row)}</td>
     `;
     frag.appendChild(tr);
@@ -589,6 +642,27 @@ async function loadAlerts() {
   }
 }
 
+async function handleNotificationLaunch() {
+  const context = parseNotificationLaunchContext();
+  if (!context) return;
+  const alert = alertsCache.find((a) => a.id === context.alertId);
+  if (!alert) {
+    clearNotificationLaunchParams();
+    setAlertStatus("Opened from notification, but that saved search is no longer available.", "err");
+    return;
+  }
+
+  try {
+    await populateSearchFromAlert(alert, {
+      autoSearch: true,
+      notificationKeys: context.keys,
+    });
+    setAlertStatus("Opened notification search and highlighted new arrivals.", "ok");
+  } finally {
+    clearNotificationLaunchParams();
+  }
+}
+
 async function saveAlert() {
   const selection = describeCurrentSelection();
   if (!selection) {
@@ -646,6 +720,7 @@ async function deleteAlert(id) {
 // Event wiring
 els.make.addEventListener("change", async () => {
   const make = (els.make.value || "").trim();
+  clearHighlightedNewArrivals();
   els.quickFilter.value = "";
   lastRows = [];
   clearResults("Loading models…");
@@ -656,6 +731,7 @@ els.make.addEventListener("change", async () => {
 });
 
 els.model.addEventListener("change", () => {
+  clearHighlightedNewArrivals();
   els.quickFilter.value = "";
   lastRows = [];
   clearResults("Ready to search.");
@@ -668,6 +744,7 @@ els.searchBtn.addEventListener("click", () => searchAllYards());
 els.saveAlertBtn.addEventListener("click", () => saveAlert());
 
 els.resetBtn.addEventListener("click", async () => {
+  clearHighlightedNewArrivals();
   els.minYear.value = "";
   els.maxYear.value = "";
   els.quickFilter.value = "";
@@ -711,6 +788,7 @@ els.maxYear.addEventListener("input", () => {
     await loadMakesAllYards();
     updateAlertNotes();
     await loadAlerts();
+    await handleNotificationLaunch();
   } catch (e) {
     setStatus("Failed to load makes. Check Worker URL + CORS.", "err");
     els.make.disabled = true;
