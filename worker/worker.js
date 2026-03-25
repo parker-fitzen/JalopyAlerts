@@ -734,7 +734,16 @@ function pickAllowedOrigin(request, env) {
 function buildNotificationPayload(search, newVehicles) {
   const detail = `${describeYearRangeText(search)} ${search.VehicleMake}${search.VehicleModel ? ` ${search.VehicleModel}` : ""}`;
   const yardNames = Array.from(new Set(newVehicles.map((r) => r.yardName))).join(", ");
-  const body = `${newVehicles.length} new arrival(s) at ${yardNames || "unknown yard"}.`;
+  const arrivalDate = new Date().toISOString();
+  const arrivalDateText = formatArrivalDateMMDDYYYY(arrivalDate);
+  const arrivalWord = newVehicles.length === 1 ? "arrival" : "arrivals";
+  const bodyHeader = `${newVehicles.length} new ${arrivalWord} @ ${formatYardList(yardNames)} — ${arrivalDateText}`;
+  const detailLines = newVehicles
+    .slice(0, 3)
+    .map((r) => `- Vehicle: ${r.year} ${r.make} ${r.model} • Location: ${displayYardName(r.yardName)} • Row: ${r.row}`);
+  if (newVehicles.length > 3) detailLines.push(`- +${newVehicles.length - 3} more`);
+  const body = [bodyHeader, ...detailLines].join("\n");
+  const newVehicleKeys = newVehicles.map(inventoryKey);
   return {
     title: `Jalopy Alerts: ${detail}`,
     body,
@@ -742,8 +751,48 @@ function buildNotificationPayload(search, newVehicles) {
       alertId: search.id,
       count: newVehicles.length,
       yards: yardNames,
+      arrivalDate,
+      newVehicleKeys,
+      url: buildNotificationUrl(search.id, newVehicleKeys),
     },
   };
+}
+
+function buildNotificationUrl(alertId, keys) {
+  const params = new URLSearchParams();
+  params.set("source", "notification");
+  params.set("alert", String(alertId || "").trim());
+  const compact = (keys || []).map((k) => encodeURIComponent(String(k))).join(",");
+  if (compact) params.set("newKeys", compact);
+  return `/?${params.toString()}`;
+}
+
+function formatArrivalDateMMDDYYYY(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "unknown date";
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+  return `${mm}-${dd}-${yyyy}`;
+}
+
+function displayYardName(name) {
+  const normalized = normalizeText(name || "").toUpperCase();
+  if (!normalized) return "Unknown Yard";
+  if (normalized === "TRUSTY'S") return "TRUSTY'S";
+  return `JJ ${normalized}`;
+}
+
+function formatYardList(names) {
+  const list = (names || "")
+    .split(",")
+    .map((n) => n.trim())
+    .filter(Boolean)
+    .map((n) => displayYardName(n));
+  if (!list.length) return "unknown yard";
+  if (list.length === 1) return list[0];
+  if (list.length === 2) return `${list[0]} and ${list[1]}`;
+  return `${list.slice(0, -1).join(", ")}, and ${list[list.length - 1]}`;
 }
 
 function describeYearRangeText(search) {
