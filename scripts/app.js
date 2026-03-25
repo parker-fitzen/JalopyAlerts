@@ -362,8 +362,8 @@ function renderRows(rows) {
       <td>${escapeHtml(displayYardName(r.yardName))}</td>
       <td>${escapeHtml(String(r.year))}</td>
       <td>${escapeHtml(r.make)}</td>
-      <td>${escapeHtml(r.model)}${newBadge}</td>
-      <td>${escapeHtml(r.row)}</td>
+      <td>${escapeHtml(r.model)}</td>
+      <td>${escapeHtml(r.row)}${newBadge}</td>
     `;
     frag.appendChild(tr);
   }

@@ -22,8 +22,8 @@ const MOCK_ALERTS = [
     newKeys: ["1020:2014:TOYOTA:CAMRY:ROW-42"],
     notification: {
       title: "Jalopy Alerts: 2010–2015 TOYOTA CAMRY",
-      body: "1 new arrival(s) at BOISE. 2014 row ROW-42 (JJ BOISE) — 2026-03-25",
-      arrivalDate: "2026-03-25",
+      body: "1 new arrival @ JJ BOISE — 03-25-2026\n- Vehicle: 2014 TOYOTA CAMRY • Location: JJ BOISE • Row: ROW-42",
+      arrivalDate: "03-25-2026",
     },
   },
   {
@@ -37,8 +37,8 @@ const MOCK_ALERTS = [
     newKeys: ["1022:2008:HONDA:ACCORD:ROW-9"],
     notification: {
       title: "Jalopy Alerts: 2005+ HONDA",
-      body: "1 new arrival(s) at NAMPA. 2008 row ROW-9 (JJ NAMPA) — 2026-03-24",
-      arrivalDate: "2026-03-24",
+      body: "1 new arrival @ JJ NAMPA — 03-24-2026\n- Vehicle: 2008 HONDA ACCORD • Location: JJ NAMPA • Row: ROW-9",
+      arrivalDate: "03-24-2026",
     },
   },
 ];
@@ -86,7 +86,7 @@ function renderNotificationPreview() {
     <h3 style="margin-top:0;">Notification Preview (Mock)</h3>
     <div class="muted-border ok" style="margin-top:10px;">
       <div style="font-weight:700;">${escapeHtml(n.title)}</div>
-      <div style="margin-top:6px;">${escapeHtml(n.body)}</div>
+      <div style="margin-top:6px; white-space: pre-line;">${escapeHtml(n.body)}</div>
       <div class="muted" style="margin-top:6px;">Arrival date: ${escapeHtml(n.arrivalDate)}</div>
     </div>
   `;
@@ -121,8 +121,8 @@ function renderResults() {
       <td>${escapeHtml(row.yardName)}</td>
       <td>${escapeHtml(row.year)}</td>
       <td>${escapeHtml(row.make)}</td>
-      <td>${escapeHtml(row.model)}${badge}</td>
-      <td>${escapeHtml(row.row)}</td>
+      <td>${escapeHtml(row.model)}</td>
+      <td>${escapeHtml(row.row)}${badge}</td>
     `;
     els.results.appendChild(tr);
   }
